@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — Finanças Pessoais{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block topbar_action %}
+<button class="btn btn-primary" onclick="openModal('modalLancamento')">+ Novo Lançamento</button>
+{% endblock %}
+
+{% block content %}
+
+<!-- Cards de resumo -->
+<div class="grid-3 mb-24">
+    <div class="card">
+        <div class="card-title">Saldo Total</div>
+        <div class="card-value" style="color: {{ 'var(--green)' if saldo_total >= 0 else 'var(--red)' }}">
+            R$ {{ '%.2f'|format(saldo_total)|replace('.', ',') }}
+        </div>
+        <div class="card-sub">Histórico acumulado</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Receitas do Mês</div>
+        <div class="card-value" style="color: var(--green)">
+            R$ {{ '%.2f'|format(resumo.receitas)|replace('.', ',') }}
+        </div>
+        <div class="card-sub">{{ hoje.strftime('%B de %Y') }}</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Despesas do Mês</div>
+        <div class="card-value" style="color: var(--red)">
+            R$ {{ '%.2f'|format(resumo.despesas)|replace('.', ',') }}
+        </div>
+        <div class="card-sub">{{ hoje.strftime('%B de %Y') }}</div>
+    </div>
+</div>
+
+<!-- Saldo do mês -->
+<div class="card mb-24">
+    <div class="flex-between mb-16">
+        <div>
+            <div class="card-title">Saldo do Mês</div>
+            <div class="card-value" style="color: {{ 'var(--green)' if resumo.saldo >= 0 else 'var(--red)' }}">
+                R$ {{ '%.2f'|format(resumo.saldo)|replace('.', ',') }}
+            </div>
+        </div>
+        {% if resumo.receitas > 0 %}
+        <div style="text-align:right">
+            <div class="text-sm text-muted mb-8">Economia do mês</div>
+            <div style="font-size:22px; font-weight:700; color: var(--blue)">
+                {{ '%.0f'|format((resumo.saldo / resumo.receitas * 100) if resumo.receitas > 0 else 0) }}%
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% if resumo.receitas > 0 %}
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: {{ [(resumo.despesas / resumo.receitas * 100), 100]|min }}%; background: {% if resumo.despesas / resumo.receitas > 0.8 %}var(--red){% elif resumo.despesas / resumo.receitas > 0.5 %}var(--yellow){% else %}var(--green){% endif %};"></div>
+    </div>
+    <div class="flex-between text-sm text-muted" style="margin-top:6px">
+        <span>Despesas: {{ '%.0f'|format(resumo.despesas / resumo.receitas * 100) }}% da receita</span>
+        <span>Meta: &lt; 80%</span>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Gráficos -->
+<div class="grid-2 mb-24">
+    <div class="card">
+        <div class="card-title">Últimos 6 Meses</div>
+        <canvas id="chartMensal" height="200"></canvas>
+    </div>
+    <div class="card">
+        <div class="card-title">Gastos por Categoria</div>
+        {% if cat_labels != '[]' %}
+        <canvas id="chartCat" height="200"></canvas>
+        {% else %}
+        <div class="empty">
+            <div class="empty-icon">🏷️</div>
+            <p>Nenhum gasto com categoria ainda</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Metas e Últimos Lançamentos -->
+<div class="grid-2">
+    <!-- Metas -->
+    <div class="card">
+        <div class="flex-between mb-16">
+            <div class="card-title" style="margin:0">Metas Ativas</div>
+            <a href="/metas" class="btn btn-ghost btn-sm">Ver todas</a>
+        </div>
+        {% if metas %}
+            {% for meta in metas[:3] %}
+            <div style="margin-bottom: 20px;">
+                <div class="flex-between mb-8">
+                    <span style="font-size:14px; font-weight:600">{{ meta.icone }} {{ meta.nome }}</span>
+                    <span class="text-sm text-muted">{{ '%.0f'|format((meta.valor_atual / meta.valor_alvo * 100) if meta.valor_alvo > 0 else 0) }}%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: {{ [(meta.valor_atual / meta.valor_alvo * 100), 100]|min if meta.valor_alvo > 0 else 0 }}%; background: var(--purple);"></div>
+                </div>
+                <div class="flex-between text-sm text-muted" style="margin-top:4px">
+                    <span>R$ {{ '%.2f'|format(meta.valor_atual)|replace('.', ',') }}</span>
+                    <span>R$ {{ '%.2f'|format(meta.valor_alvo)|replace('.', ',') }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="empty">
+            <div class="empty-icon">🎯</div>
+            <p>Nenhuma meta criada ainda</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Últimos lançamentos -->
+    <div class="card">
+        <div class="flex-between mb-16">
+            <div class="card-title" style="margin:0">Últimos Lançamentos</div>
+            <a href="/lancamentos" class="btn btn-ghost btn-sm">Ver todos</a>
+        </div>
+        {% if ultimos %}
+        <div class="table-wrap">
+            {% for l in ultimos %}
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom: 1px solid rgba(30,39,64,.4);">
+                <div>
+                    <div style="font-size:13px; font-weight:500">{{ l.descricao }}</div>
+                    <div class="text-sm text-muted">
+                        {{ l.data.strftime('%d/%m/%Y') }}
+                        {% if l.categoria %} · {{ l.categoria.icone }} {{ l.categoria.nome }}{% endif %}
+                    </div>
+                </div>
+                <span class="{{ 'valor-green' if l.tipo == 'receita' else 'valor-red' }}" style="font-size:14px">
+                    {{ '+' if l.tipo == 'receita' else '-' }}R$ {{ '%.2f'|format(l.valor)|replace('.', ',') }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">
+            <div class="empty-icon">💳</div>
+            <p>Nenhum lançamento ainda.<br>Comece adicionando uma receita ou despesa.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Modal Novo Lançamento -->
+<div class="modal-overlay" id="modalLancamento" onclick="if(event.target===this)closeModal('modalLancamento')">
+    <div class="modal">
+        <h3>Novo Lançamento</h3>
+        <form action="/lancamento/novo" method="POST">
+            <div class="tipo-toggle">
+                <div class="tipo-btn receita active" data-tipo="receita">✅ Receita</div>
+                <div class="tipo-btn despesa" data-tipo="despesa">❌ Despesa</div>
+            </div>
+            <input type="hidden" name="tipo" value="receita" id="tipoInput">
+
+            <div class="form-group">
+                <label>Descrição</label>
+                <input type="text" name="descricao" placeholder="Ex: Salário, Supermercado..." required>
+            </div>
+            <div class="grid-2">
+                <div class="form-group">
+                    <label>Valor (R$)</label>
+                    <input type="number" name="valor" step="0.01" min="0.01" placeholder="0,00" required>
+                </div>
+                <div class="form-group">
+                    <label>Data</label>
+                    <input type="date" name="data" value="{{ hoje.strftime('%Y-%m-%d') }}" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Categoria</label>
+                <select name="categoria_id" id="categoriaSelect">
+                    <option value="">Sem categoria</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Observação (opcional)</label>
+                <textarea name="observacao" rows="2" placeholder="Alguma nota adicional..."></textarea>
+            </div>
+            <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('modalLancamento')">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Fix tipo input no modal do dashboard
+const tipoToggle = document.querySelector('.tipo-toggle');
+const tipoInput = document.getElementById('tipoInput');
+const catSelect = document.getElementById('categoriaSelect');
+
+document.querySelectorAll('.tipo-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.tipo-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        tipoInput.value = this.dataset.tipo;
+        carregarCategorias(this.dataset.tipo, catSelect);
+    });
+});
+
+// Carrega categorias de receita ao abrir modal
+document.querySelector('[onclick="openModal(\'modalLancamento\')"]').addEventListener('click', () => {
+    carregarCategorias('receita', catSelect);
+});
+
+// Gráfico mensal
+const ctxMensal = document.getElementById('chartMensal').getContext('2d');
+new Chart(ctxMensal, {
+    type: 'bar',
+    data: {
+        labels: {{ meses_labels|safe }},
+        datasets: [
+            {
+                label: 'Receitas',
+                data: {{ meses_receitas|safe }},
+                backgroundColor: 'rgba(16,217,138,.7)',
+                borderRadius: 6,
+            },
+            {
+                label: 'Despesas',
+                data: {{ meses_despesas|safe }},
+                backgroundColor: 'rgba(240,70,110,.7)',
+                borderRadius: 6,
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: '#7c8db5', font: { size: 11 } } } },
+        scales: {
+            x: { ticks: { color: '#7c8db5' }, grid: { color: 'rgba(30,39,64,.5)' } },
+            y: { ticks: { color: '#7c8db5', callback: v => 'R$' + v.toLocaleString('pt-BR') }, grid: { color: 'rgba(30,39,64,.5)' } }
+        }
+    }
+});
+
+// Gráfico categorias
+{% if cat_labels != '[]' %}
+const ctxCat = document.getElementById('chartCat').getContext('2d');
+new Chart(ctxCat, {
+    type: 'doughnut',
+    data: {
+        labels: {{ cat_labels|safe }},
+        datasets: [{
+            data: {{ cat_valores|safe }},
+            backgroundColor: ['#f0466e','#4f8ef7','#10d98a','#f5c542','#8b6cf7','#f97316','#06b6d4','#ec4899'],
+            borderWidth: 0,
+            hoverOffset: 6
+        }]
+    },
+    options: {
+        responsive: true,
+        cutout: '65%',
+        plugins: {
+            legend: { position: 'bottom', labels: { color: '#7c8db5', font: { size: 11 }, padding: 12 } }
+        }
+    }
+});
+{% endif %}
+</script>
+{% endblock %}

@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Categorias — Finanças Pessoais{% endblock %}
+{% block page_title %}Categorias{% endblock %}
+
+{% block topbar_action %}
+<button class="btn btn-primary" onclick="openModal('modalCategoria')">+ Nova Categoria</button>
+{% endblock %}
+
+{% block content %}
+
+<div class="grid-2">
+    <!-- Receitas -->
+    <div class="card">
+        <div class="card-title" style="color: var(--green); margin-bottom:16px">✅ Categorias de Receita</div>
+        {% set receitas = categorias|selectattr('tipo', 'equalto', 'receita')|list %}
+        {% if receitas %}
+        {% for c in receitas %}
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom: 1px solid rgba(30,39,64,.4)">
+            <div style="display:flex; align-items:center; gap:10px">
+                <span style="font-size:20px">{{ c.icone }}</span>
+                <span style="font-size:14px; font-weight:500">{{ c.nome }}</span>
+            </div>
+            <form action="/categoria/excluir/{{ c.id }}" method="POST" onsubmit="return confirm('Excluir categoria \'{{ c.nome }}\'?')">
+                <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red); border:none">🗑</button>
+            </form>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty"><p>Nenhuma categoria de receita</p></div>
+        {% endif %}
+    </div>
+
+    <!-- Despesas -->
+    <div class="card">
+        <div class="card-title" style="color: var(--red); margin-bottom:16px">❌ Categorias de Despesa</div>
+        {% set despesas = categorias|selectattr('tipo', 'equalto', 'despesa')|list %}
+        {% if despesas %}
+        {% for c in despesas %}
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom: 1px solid rgba(30,39,64,.4)">
+            <div style="display:flex; align-items:center; gap:10px">
+                <span style="font-size:20px">{{ c.icone }}</span>
+                <span style="font-size:14px; font-weight:500">{{ c.nome }}</span>
+            </div>
+            <form action="/categoria/excluir/{{ c.id }}" method="POST" onsubmit="return confirm('Excluir categoria \'{{ c.nome }}\'?')">
+                <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red); border:none">🗑</button>
+            </form>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty"><p>Nenhuma categoria de despesa</p></div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Modal Nova Categoria -->
+<div class="modal-overlay" id="modalCategoria" onclick="if(event.target===this)closeModal('modalCategoria')">
+    <div class="modal">
+        <h3>Nova Categoria</h3>
+        <form action="/categoria/nova" method="POST">
+            <div class="form-group">
+                <label>Tipo</label>
+                <div class="tipo-toggle">
+                    <div class="tipo-btn receita active" data-tipo="receita">✅ Receita</div>
+                    <div class="tipo-btn despesa" data-tipo="despesa">❌ Despesa</div>
+                </div>
+                <input type="hidden" name="tipo" value="receita" id="tipoCategoria">
+            </div>
+            <div class="form-group">
+                <label>Ícone</label>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px">
+                    {% for ic in ['💰','🏠','🚗','🍽️','💻','📚','🏥','🎮','✈️','👕','💪','🎵','📱','🛒','💡','🔧'] %}
+                    <button type="button" class="icone-btn" data-icone="{{ ic }}" style="font-size:20px; background: var(--bg3); border: 2px solid var(--border); border-radius:8px; padding:5px 9px; cursor:pointer; transition: all .15s">{{ ic }}</button>
+                    {% endfor %}
+                </div>
+                <input type="hidden" name="icone" id="iconeCategoria" value="💰">
+            </div>
+            <div class="form-group">
+                <label>Nome</label>
+                <input type="text" name="nome" placeholder="Ex: Academia, Streaming..." required>
+            </div>
+            <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('modalCategoria')">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Criar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('.tipo-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.tipo-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        document.getElementById('tipoCategoria').value = this.dataset.tipo;
+    });
+});
+
+document.querySelectorAll('.icone-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.icone-btn').forEach(b => b.style.borderColor = 'var(--border)');
+        this.style.borderColor = 'var(--blue)';
+        document.getElementById('iconeCategoria').value = this.dataset.icone;
+    });
+});
+document.querySelector('.icone-btn').style.borderColor = 'var(--blue)';
+</script>
+{% endblock %}

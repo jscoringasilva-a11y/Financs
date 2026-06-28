@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Relatórios — Finanças Pessoais{% endblock %}
+{% block page_title %}Relatórios{% endblock %}
+
+{% block topbar_action %}
+<form method="GET" style="display:flex; gap:8px; align-items:center">
+    <select name="ano" onchange="this.form.submit()" style="width:auto; padding:8px 14px">
+        {% for a in anos_disponiveis %}
+        <option value="{{ a }}" {{ 'selected' if a == ano }}>{{ a }}</option>
+        {% endfor %}
+    </select>
+</form>
+{% endblock %}
+
+{% block content %}
+
+<!-- Resumo anual -->
+<div class="grid-3 mb-24">
+    <div class="card">
+        <div class="card-title">Total de Receitas {{ ano }}</div>
+        <div class="card-value" style="color: var(--green)">R$ {{ '%.2f'|format(total_rec)|replace('.', ',') }}</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Total de Despesas {{ ano }}</div>
+        <div class="card-value" style="color: var(--red)">R$ {{ '%.2f'|format(total_desp)|replace('.', ',') }}</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Saldo do Ano</div>
+        <div class="card-value" style="color: {{ 'var(--green)' if total_rec - total_desp >= 0 else 'var(--red)' }}">
+            R$ {{ '%.2f'|format(total_rec - total_desp)|replace('.', ',') }}
+        </div>
+    </div>
+</div>
+
+<!-- Gráfico anual -->
+<div class="card mb-24">
+    <div class="card-title">Receitas vs Despesas — {{ ano }}</div>
+    <canvas id="chartAnual" height="100"></canvas>
+</div>
+
+<div class="grid-2 mb-24">
+    <!-- Gastos por categoria -->
+    <div class="card">
+        <div class="card-title">Maiores Gastos por Categoria</div>
+        {% if cat_desp %}
+        {% set total_cat = cat_desp.values()|sum %}
+        {% for nome, valor in cat_desp.items() %}
+        <div style="margin-bottom:14px">
+            <div class="flex-between mb-8">
+                <span style="font-size:13px; font-weight:500">{{ nome }}</span>
+                <span style="font-size:13px; font-weight:600; color: var(--red)">R$ {{ '%.2f'|format(valor)|replace('.', ',') }}</span>
+            </div>
+            <div class="progress-bar" style="height:6px">
+                <div class="progress-fill" style="width:{{ (valor / total_cat * 100)|round }}%; background: var(--red); opacity: 0.7;"></div>
+            </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty"><div class="empty-icon">📊</div><p>Sem dados de despesas</p></div>
+        {% endif %}
+    </div>
+
+    <!-- Receitas por categoria -->
+    <div class="card">
+        <div class="card-title">Receitas por Categoria</div>
+        {% if cat_rec %}
+        {% set total_cat_rec = cat_rec.values()|sum %}
+        {% for nome, valor in cat_rec.items() %}
+        <div style="margin-bottom:14px">
+            <div class="flex-between mb-8">
+                <span style="font-size:13px; font-weight:500">{{ nome }}</span>
+                <span style="font-size:13px; font-weight:600; color: var(--green)">R$ {{ '%.2f'|format(valor)|replace('.', ',') }}</span>
+            </div>
+            <div class="progress-bar" style="height:6px">
+                <div class="progress-fill" style="width:{{ (valor / total_cat_rec * 100)|round }}%; background: var(--green); opacity: 0.8;"></div>
+            </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty"><div class="empty-icon">📊</div><p>Sem dados de receitas</p></div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Tabela mensal -->
+<div class="card">
+    <div class="card-title">Resumo Mensal — {{ ano }}</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Mês</th>
+                    <th class="text-right">Receitas</th>
+                    <th class="text-right">Despesas</th>
+                    <th class="text-right">Saldo</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in meses_data %}
+                <tr>
+                    <td style="font-weight:500">{{ m.mes }}</td>
+                    <td class="text-right valor-green">R$ {{ '%.2f'|format(m.receitas)|replace('.', ',') }}</td>
+                    <td class="text-right valor-red">R$ {{ '%.2f'|format(m.despesas)|replace('.', ',') }}</td>
+                    <td class="text-right" style="font-weight:600; color: {{ 'var(--green)' if m.saldo >= 0 else 'var(--red)' }}">
+                        R$ {{ '%.2f'|format(m.saldo)|replace('.', ',') }}
+                    </td>
+                </tr>
+                {% endfor %}
+                <tr style="border-top: 2px solid var(--border)">
+                    <td style="font-weight:700">Total</td>
+                    <td class="text-right valor-green fw-600">R$ {{ '%.2f'|format(total_rec)|replace('.', ',') }}</td>
+                    <td class="text-right valor-red fw-600">R$ {{ '%.2f'|format(total_desp)|replace('.', ',') }}</td>
+                    <td class="text-right fw-600" style="color: {{ 'var(--green)' if total_rec - total_desp >= 0 else 'var(--red)' }}">
+                        R$ {{ '%.2f'|format(total_rec - total_desp)|replace('.', ',') }}
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ctxAnual = document.getElementById('chartAnual').getContext('2d');
+new Chart(ctxAnual, {
+    type: 'line',
+    data: {
+        labels: {{ meses_labels|safe }},
+        datasets: [
+            {
+                label: 'Receitas',
+                data: {{ meses_rec_json|safe }},
+                borderColor: '#10d98a',
+                backgroundColor: 'rgba(16,217,138,.1)',
+                fill: true,
+                tension: 0.4,
+                pointBackgroundColor: '#10d98a',
+                pointRadius: 4,
+            },
+            {
+                label: 'Despesas',
+                data: {{ meses_desp_json|safe }},
+                borderColor: '#f0466e',
+                backgroundColor: 'rgba(240,70,110,.1)',
+                fill: true,
+                tension: 0.4,
+                pointBackgroundColor: '#f0466e',
+                pointRadius: 4,
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { labels: { color: '#7c8db5', font: { size: 12 } } } },
+        scales: {
+            x: { ticks: { color: '#7c8db5' }, grid: { color: 'rgba(30,39,64,.5)' } },
+            y: {
+                ticks: { color: '#7c8db5', callback: v => 'R$ ' + v.toLocaleString('pt-BR', {minimumFractionDigits: 2}) },
+                grid: { color: 'rgba(30,39,64,.5)' }
+            }
+        }
+    }
+});
+</script>
+{% endblock %}

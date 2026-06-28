@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}Lançamentos — Finanças Pessoais{% endblock %}
+{% block page_title %}Lançamentos{% endblock %}
+
+{% block topbar_action %}
+<button class="btn btn-primary" onclick="openModal('modalLancamento')">+ Novo Lançamento</button>
+{% endblock %}
+
+{% block content %}
+
+<!-- Filtros -->
+<div class="card mb-24">
+    <form method="GET" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end">
+        <div class="form-group" style="margin:0; flex:1; min-width:120px">
+            <label>Tipo</label>
+            <select name="tipo" onchange="this.form.submit()">
+                <option value="">Todos</option>
+                <option value="receita" {{ 'selected' if filtro_tipo == 'receita' }}>Receitas</option>
+                <option value="despesa" {{ 'selected' if filtro_tipo == 'despesa' }}>Despesas</option>
+            </select>
+        </div>
+        <div class="form-group" style="margin:0; flex:1; min-width:160px">
+            <label>Categoria</label>
+            <select name="categoria_id" onchange="this.form.submit()">
+                <option value="">Todas</option>
+                {% for c in categorias %}
+                <option value="{{ c.id }}" {{ 'selected' if filtro_categoria == c.id|string }}>{{ c.icone }} {{ c.nome }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group" style="margin:0; flex:1; min-width:140px">
+            <label>Mês</label>
+            <input type="month" name="mes" value="{{ filtro_mes }}" onchange="this.form.submit()">
+        </div>
+        {% if filtro_tipo or filtro_categoria or filtro_mes %}
+        <a href="/lancamentos" class="btn btn-ghost" style="height:42px">Limpar</a>
+        {% endif %}
+    </form>
+</div>
+
+<!-- Tabela -->
+<div class="card">
+    {% if lancamentos.items %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Data</th>
+                    <th>Descrição</th>
+                    <th>Categoria</th>
+                    <th>Tipo</th>
+                    <th class="text-right">Valor</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for l in lancamentos.items %}
+                <tr>
+                    <td class="text-muted" style="white-space:nowrap">{{ l.data.strftime('%d/%m/%Y') }}</td>
+                    <td>
+                        <div style="font-weight:500">{{ l.descricao }}</div>
+                        {% if l.observacao %}
+                        <div class="text-sm text-muted">{{ l.observacao }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if l.categoria %}
+                        <span class="badge badge-blue">{{ l.categoria.icone }} {{ l.categoria.nome }}</span>
+                        {% else %}
+                        <span class="text-muted text-sm">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if l.tipo == 'receita' %}
+                        <span class="badge badge-green">↑ Receita</span>
+                        {% else %}
+                        <span class="badge badge-red">↓ Despesa</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right {{ 'valor-green' if l.tipo == 'receita' else 'valor-red' }}" style="white-space:nowrap">
+                        {{ '+' if l.tipo == 'receita' else '-' }}R$ {{ '%.2f'|format(l.valor)|replace('.', ',') }}
+                    </td>
+                    <td class="text-right">
+                        <form action="/lancamento/excluir/{{ l.id }}" method="POST" onsubmit="return confirm('Excluir este lançamento?')">
+                            <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red); border-color:transparent">🗑</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Paginação -->
+    {% if lancamentos.pages > 1 %}
+    <div class="flex gap-8" style="justify-content:center; margin-top:20px; flex-wrap:wrap">
+        {% for p in lancamentos.iter_pages() %}
+            {% if p %}
+            <a href="?page={{ p }}&tipo={{ filtro_tipo }}&categoria_id={{ filtro_categoria }}&mes={{ filtro_mes }}"
+               class="btn {{ 'btn-primary' if p == lancamentos.page else 'btn-ghost' }} btn-sm">{{ p }}</a>
+            {% else %}
+            <span class="text-muted" style="padding:6px 4px">…</span>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty">
+        <div class="empty-icon">💳</div>
+        <p>Nenhum lançamento encontrado.<br>
+        {% if filtro_tipo or filtro_categoria or filtro_mes %}
+        Tente remover os filtros ou <button class="btn btn-ghost btn-sm" onclick="openModal('modalLancamento')">adicione um novo</button>.
+        {% else %}
+        Comece adicionando uma receita ou despesa.
+        {% endif %}
+        </p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Modal Novo Lançamento -->
+<div class="modal-overlay" id="modalLancamento" onclick="if(event.target===this)closeModal('modalLancamento')">
+    <div class="modal">
+        <h3>Novo Lançamento</h3>
+        <form action="/lancamento/novo" method="POST">
+            <div class="tipo-toggle">
+                <div class="tipo-btn receita active" data-tipo="receita">✅ Receita</div>
+                <div class="tipo-btn despesa" data-tipo="despesa">❌ Despesa</div>
+            </div>
+            <input type="hidden" name="tipo" value="receita" id="tipoInput">
+
+            <div class="form-group">
+                <label>Descrição</label>
+                <input type="text" name="descricao" placeholder="Ex: Salário, Supermercado..." required>
+            </div>
+            <div class="grid-2">
+                <div class="form-group">
+                    <label>Valor (R$)</label>
+                    <input type="number" name="valor" step="0.01" min="0.01" placeholder="0,00" required>
+                </div>
+                <div class="form-group">
+                    <label>Data</label>
+                    <input type="date" name="data" value="{{ hoje_str }}" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Categoria</label>
+                <select name="categoria_id" id="categoriaSelect">
+                    <option value="">Sem categoria</option>
+                    {% for c in categorias if c.tipo == 'receita' %}
+                    <option value="{{ c.id }}">{{ c.icone }} {{ c.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Observação (opcional)</label>
+                <textarea name="observacao" rows="2" placeholder="Alguma nota adicional..."></textarea>
+            </div>
+            <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('modalLancamento')">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const tipoInput = document.getElementById('tipoInput');
+const catSelect = document.getElementById('categoriaSelect');
+
+document.querySelectorAll('.tipo-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.tipo-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        tipoInput.value = this.dataset.tipo;
+        carregarCategorias(this.dataset.tipo, catSelect);
+    });
+});
+
+// Definir data de hoje no formulário
+document.querySelector('input[name="data"]').value = new Date().toISOString().split('T')[0];
+</script>
+{% endblock %}

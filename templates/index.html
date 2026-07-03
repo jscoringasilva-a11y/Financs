@@ -172,6 +172,12 @@
                 </div>
             </div>
             <div class="form-group">
+                <label>Conta</label>
+                <select name="conta_id" id="contaSelect">
+                    <option value="">Sem conta</option>
+                </select>
+            </div>
+            <div class="form-group">
                 <label>Categoria</label>
                 <select name="categoria_id" id="categoriaSelect">
                     <option value="">Sem categoria</option>
@@ -207,10 +213,26 @@ document.querySelectorAll('.tipo-btn').forEach(btn => {
     });
 });
 
-// Carrega categorias de receita ao abrir modal
+// Carrega categorias e contas ao abrir modal
 document.querySelector('[onclick="openModal(\'modalLancamento\')"]').addEventListener('click', () => {
     carregarCategorias('receita', catSelect);
+    carregarContas();
 });
+
+function carregarContas() {
+    fetch('/api/contas')
+        .then(r => r.json())
+        .then(contas => {
+            const sel = document.getElementById('contaSelect');
+            sel.innerHTML = '<option value="">Sem conta</option>';
+            contas.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = `${c.icone} ${c.nome}`;
+                sel.appendChild(opt);
+            });
+        });
+}
 
 // Gráfico mensal
 const ctxMensal = document.getElementById('chartMensal').getContext('2d');

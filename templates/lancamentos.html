@@ -81,8 +81,10 @@
                     <td class="text-right {{ 'valor-green' if l.tipo == 'receita' else 'valor-red' }}" style="white-space:nowrap">
                         {{ '+' if l.tipo == 'receita' else '-' }}R$ {{ '%.2f'|format(l.valor)|replace('.', ',') }}
                     </td>
-                    <td class="text-right">
-                        <form action="/lancamento/excluir/{{ l.id }}" method="POST" onsubmit="return confirm('Excluir este lançamento?')">
+                    <td class="text-right" style="white-space:nowrap">
+                        <button class="btn btn-ghost btn-sm" style="border-color:transparent"
+                            onclick="abrirEditar({{ l.id }}, '{{ l.descricao|e }}', {{ l.valor }}, '{{ l.tipo }}', '{{ l.data.strftime('%Y-%m-%d') }}', {{ l.categoria_id or 'null' }}, '{{ l.observacao|e }}')">✏️</button>
+                        <form action="/lancamento/excluir/{{ l.id }}" method="POST" onsubmit="return confirm('Excluir este lançamento?')" style="display:inline">
                             <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red); border-color:transparent">🗑</button>
                         </form>
                     </td>
@@ -166,6 +168,51 @@
     </div>
 </div>
 
+<!-- Modal Editar Lançamento -->
+<div class="modal-overlay" id="modalEditar" onclick="if(event.target===this)closeModal('modalEditar')">
+    <div class="modal">
+        <h3>✏️ Editar Lançamento</h3>
+        <form id="formEditar" action="" method="POST">
+            <div class="tipo-toggle">
+                <div class="tipo-btn receita" data-tipo="receita" id="editTipoReceita">✅ Receita</div>
+                <div class="tipo-btn despesa" data-tipo="despesa" id="editTipoDespesa">❌ Despesa</div>
+            </div>
+            <input type="hidden" name="tipo" id="editTipoInput">
+            <div class="form-group">
+                <label>Descrição</label>
+                <input type="text" name="descricao" id="editDescricao" required>
+            </div>
+            <div class="grid-2">
+                <div class="form-group">
+                    <label>Valor (R$)</label>
+                    <input type="number" name="valor" id="editValor" step="0.01" min="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label>Data</label>
+                    <input type="date" name="data" id="editData" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Categoria</label>
+                <select name="categoria_id" id="editCategoriaSelect">
+                    <option value="">Sem categoria</option>
+                    {% for c in categorias %}
+                    <option value="{{ c.id }}">{{ c.icone }} {{ c.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Observação (opcional)</label>
+                <textarea name="observacao" id="editObservacao" rows="2"></textarea>
+            </div>
+            <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('modalEditar')">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar alterações</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -184,5 +231,39 @@ document.querySelectorAll('.tipo-btn').forEach(btn => {
 
 // Definir data de hoje no formulário
 document.querySelector('input[name="data"]').value = new Date().toISOString().split('T')[0];
+
+function abrirEditar(id, descricao, valor, tipo, data, categoriaId, observacao) {
+    document.getElementById('formEditar').action = '/lancamento/editar/' + id;
+    document.getElementById('editDescricao').value = descricao;
+    document.getElementById('editValor').value = valor;
+    document.getElementById('editData').value = data;
+    document.getElementById('editObservacao').value = observacao || '';
+    document.getElementById('editTipoInput').value = tipo;
+
+    // Tipo toggle
+    document.getElementById('editTipoReceita').classList.remove('active');
+    document.getElementById('editTipoDespesa').classList.remove('active');
+    if (tipo === 'receita') document.getElementById('editTipoReceita').classList.add('active');
+    else document.getElementById('editTipoDespesa').classList.add('active');
+
+    // Categoria
+    const catSelect = document.getElementById('editCategoriaSelect');
+    if (categoriaId) catSelect.value = categoriaId;
+    else catSelect.value = '';
+
+    openModal('modalEditar');
+}
+
+// Tipo toggle no modal de edição
+document.getElementById('editTipoReceita').addEventListener('click', function() {
+    document.getElementById('editTipoReceita').classList.add('active');
+    document.getElementById('editTipoDespesa').classList.remove('active');
+    document.getElementById('editTipoInput').value = 'receita';
+});
+document.getElementById('editTipoDespesa').addEventListener('click', function() {
+    document.getElementById('editTipoDespesa').classList.add('active');
+    document.getElementById('editTipoReceita').classList.remove('active');
+    document.getElementById('editTipoInput').value = 'despesa';
+});
 </script>
 {% endblock %}

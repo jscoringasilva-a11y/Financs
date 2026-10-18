@@ -354,8 +354,9 @@ def relatorios():
         else:
             cat_rec[nome] += l.valor
 
+    # extract('year', ...) funciona tanto no SQLite quanto no PostgreSQL
     anos_disponiveis = db.session.query(
-        db.func.strftime('%Y', Lancamento.data)
+        db.extract('year', Lancamento.data)
     ).distinct().all()
     anos_disponiveis = sorted([int(a[0]) for a in anos_disponiveis if a[0]], reverse=True)
     if not anos_disponiveis:

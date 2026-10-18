@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Patrimônio — Finanças Pessoais{% endblock %}
+{% block page_title %}Patrimônio{% endblock %}
+
+{% block topbar_action %}
+<button class="btn btn-primary" onclick="abrirNovo('ativo')">+ Novo Item</button>
+{% endblock %}
+
+{% macro brl(v) %}R$ {{ '%.2f'|format(v)|replace('.', ',') }}{% endmacro %}
+
+{% block content %}
+
+<!-- Resumo -->
+<div class="grid-3 mb-24">
+    <div class="card">
+        <div class="card-title">Total de Ativos</div>
+        <div class="card-value" style="color: var(--green)">{{ brl(total_ativos) }}</div>
+        <div class="card-sub">Tudo que você tem</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Total de Passivos</div>
+        <div class="card-value" style="color: var(--red)">{{ brl(total_passivos) }}</div>
+        <div class="card-sub">Tudo que você deve</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Patrimônio Líquido</div>
+        <div class="card-value" style="color: {{ 'var(--green)' if patrimonio_liquido >= 0 else 'var(--red)' }}">
+            {{ brl(patrimonio_liquido) }}
+        </div>
+        <div class="card-sub">Ativos − Passivos</div>
+    </div>
+</div>
+
+{% for tipo, titulo, cor, vazio in [
+    ('ativo', 'Ativos', 'var(--green)', 'Nenhum ativo cadastrado.<br>Adicione contas, investimentos, imóveis, veículos...'),
+    ('passivo', 'Passivos', 'var(--red)', 'Nenhum passivo cadastrado.<br>Adicione financiamentos, empréstimos, cartão...')
+] %}
+<div class="flex-between" style="margin-bottom:12px">
+    <div style="font-size: 12px; font-weight: 600; color: {{ cor }}; text-transform: uppercase; letter-spacing: 0.8px;">{{ titulo }}</div>
+    <button class="btn btn-ghost btn-sm" onclick="abrirNovo('{{ tipo }}')">+ Adicionar</button>
+</div>
+
+{% if blocos[tipo] %}
+<div class="grid-2 mb-24">
+    {% for g in blocos[tipo] %}
+    <div class="card">
+        <div class="flex-between mb-16">
+            <div style="font-size:15px; font-weight:700">{{ g.icone }} {{ g.nome }}</div>
+            <div style="font-weight:700; color: {{ cor }}">{{ brl(g.total) }}</div>
+        </div>
+        {% for i in g.itens %}
+        <div class="flex-between" style="padding:10px 0; border-top:1px solid var(--border); gap:8px">
+            <div style="min-width:0">
+                <div style="font-size:14px; font-weight:600; overflow-wrap:anywhere">{{ i.nome }}</div>
+                <div class="text-sm text-muted">Atualizado em {{ i.atualizado_em.strftime('%d/%m/%Y') if i.atualizado_em else '—' }}</div>
+            </div>
+            <div class="flex" style="align-items:center; gap:8px">
+                <div style="font-weight:600; white-space:nowrap">{{ brl(i.valor) }}</div>
+                <button class="btn btn-ghost btn-sm" onclick='abrirEditar({{ i.id }}, {{ i.nome|tojson }}, {{ i.tipo|tojson }}, {{ i.grupo|tojson }}, {{ i.valor }})'>✏️</button>
+                <form action="/patrimonio/excluir/{{ i.id }}" method="POST" onsubmit="return confirm('Excluir este item?')">
+                    <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red)">🗑</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card mb-24">
+    <div class="empty">
+        <div class="empty-icon">{{ '💎' if tipo == 'ativo' else '🧾' }}</div>
+        <p>{{ vazio|safe }}</p>
+    </div>
+</div>
+{% endif %}
+{% endfor %}
+
+<!-- Modal Novo -->
+<div class="modal-overlay" id="modalNovo" onclick="if(event.target===this)closeModal('modalNovo')">
+    <div class="modal">
+        <h3>Novo Item</h3>
+        <form action="/patrimonio/novo" method="POST">
+            <div class="form-group">
+                <label>Tipo</label>
+                <select name="tipo" id="novoTipo" onchange="preencherGrupos('novoGrupo', this.value)">
+                    <option value="ativo">Ativo (o que eu tenho)</option>
+                    <option value="passivo">Passivo (o que eu devo)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Grupo</label>
+                <select name="grupo" id="novoGrupo"></select>
+            </div>
+            <div class="form-group">
+                <label>Nome</label>
+                <input type="text" name="nome" placeholder="Ex: Apartamento, CDB, Financiamento do carro..." required>
+            </div>
+            <div class="form-group">
+                <label>Valor atual (R$)</label>
+                <input type="number" name="valor" step="0.01" min="0" placeholder="0,00" required>
+            </div>
+            <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('modalNovo')">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal Editar -->
+<div class="modal-overlay" id="modalEditar" onclick="if(event.target===this)closeModal('modalEditar')">
+    <div class="modal">
+        <h3>Editar Item</h3>
+        <form id="formEditar" action="" method="POST">
+            <div class="form-group">
+                <label>Grupo</label>
+                <select name="grupo" id="editGrupo"></select>
+            </div>
+            <div class="form-group">
+                <label>Nome</label>
+                <input type="text" name="nome" id="editNome" required>
+            </div>
+            <div class="form-group">
+                <label>Valor atual (R$)</label>
+                <input type="number" name="valor" id="editValor" step="0.01" min="0" required>
+            </div>
+            <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('modalEditar')">Cancelar</button>
+                <button type="submit" class="btn btn-green">Atualizar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const GRUPOS = {{ grupos|tojson }};
+
+function preencherGrupos(selectId, tipo, selecionado) {
+    const sel = document.getElementById(selectId);
+    sel.innerHTML = '';
+    GRUPOS[tipo].forEach(([nome, icone]) => {
+        const op = document.createElement('option');
+        op.value = nome;
+        op.textContent = icone + ' ' + nome;
+        if (nome === selecionado) op.selected = true;
+        sel.appendChild(op);
+    });
+}
+
+function abrirNovo(tipo) {
+    document.getElementById('novoTipo').value = tipo;
+    preencherGrupos('novoGrupo', tipo);
+    openModal('modalNovo');
+}
+
+function abrirEditar(id, nome, tipo, grupo, valor) {
+    document.getElementById('formEditar').action = '/patrimonio/editar/' + id;
+    document.getElementById('editNome').value = nome;
+    document.getElementById('editValor').value = valor;
+    preencherGrupos('editGrupo', tipo, grupo);
+    openModal('modalEditar');
+}
+</script>
+{% endblock %}

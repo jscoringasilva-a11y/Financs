@@ -10,8 +10,11 @@ import os
 
 # Usa o PostgreSQL do Railway (DATABASE_URL); sem ele, cai no SQLite local.
 _db_url = os.environ.get('DATABASE_URL', 'sqlite:///financa.db')
-if _db_url.startswith('postgres://'):
-    _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
+# Força o driver psycopg2 (o SQLAlchemy novo usaria outro driver por padrão)
+for _prefixo in ('postgres://', 'postgresql://'):
+    if _db_url.startswith(_prefixo):
+        _db_url = 'postgresql+psycopg2://' + _db_url[len(_prefixo):]
+        break
 app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True}
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False

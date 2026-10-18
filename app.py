@@ -6,7 +6,14 @@ from collections import defaultdict
 import calendar
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///financa.db'
+import os
+
+# Usa o PostgreSQL do Railway (DATABASE_URL); sem ele, cai no SQLite local.
+_db_url = os.environ.get('DATABASE_URL', 'sqlite:///financa.db')
+if _db_url.startswith('postgres://'):
+    _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True}
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.secret_key = 'financa-pessoal-secret-2024'
 
@@ -50,6 +57,30 @@ class Meta(db.Model):
     icone = db.Column(db.String(10), default='🎯')
     ativa = db.Column(db.Boolean, default=True)
     criada_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+GRUPOS_PATRIMONIO = {
+    'ativo': [
+        ('Dinheiro e contas', '🏦'),
+        ('Investimentos', '📈'),
+        ('Imóveis', '🏠'),
+        ('Veículos', '🚗'),
+        ('Outros bens', '📦'),
+    ],
+    'passivo': [
+        ('Financiamentos', '🏗️'),
+        ('Empréstimos', '💸'),
+        ('Cartão de crédito', '💳'),
+        ('Outras dívidas', '🧾'),
+    ],
+}
+
+class Patrimonio(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(200), nullable=False)
+    tipo = db.Column(db.String(10), nullable=False)  # 'ativo' ou 'passivo'
+    grupo = db.Column(db.String(50), nullable=False)
+    valor = db.Column(db.Float, nullable=False, default=0)
+    atualizado_em = db.Column(db.DateTime, default=datetime.utcnow)
 
 # ─── SEED DATA ────────────────────────────────────────────────────────────────
 
@@ -388,6 +419,65 @@ def transferir():
 def api_contas():
     contas = Conta.query.all()
     return jsonify([{'id': c.id, 'nome': c.nome, 'icone': c.icone} for c in contas])
+
+@app.route('/patrimonio')
+def patrimonio():
+    itens = Patrimonio.query.order_by(Patrimonio.nome).all()
+    blocos = {}
+    for tipo, grupos in GRUPOS_PATRIMONIO.items():
+        blocos[tipo] = []
+        for nome_grupo, icone in grupos:
+            lista = [i for i in itens if i.tipo == tipo and i.grupo == nome_grupo]
+            if lista:
+                blocos[tipo].append({
+                    'nome': nome_grupo,
+                    'icone': icone,
+                    'itens': lista,
+                    'total': sum(i.valor for i in lista),
+                })
+    total_ativos = sum(i.valor for i in itens if i.tipo == 'ativo')
+    total_passivos = sum(i.valor for i in itens if i.tipo == 'passivo')
+    return render_template('patrimonio.html',
+        blocos=blocos,
+        total_ativos=total_ativos,
+        total_passivos=total_passivos,
+        patrimonio_liquido=total_ativos - total_passivos,
+        grupos=GRUPOS_PATRIMONIO)
+
+def _grupo_valido(tipo, grupo):
+    return tipo in GRUPOS_PATRIMONIO and grupo in [g for g, _ in GRUPOS_PATRIMONIO[tipo]]
+
+@app.route('/patrimonio/novo', methods=['POST'])
+def novo_patrimonio():
+    d = request.form
+    if _grupo_valido(d.get('tipo'), d.get('grupo')):
+        db.session.add(Patrimonio(
+            nome=d['nome'].strip(),
+            tipo=d['tipo'],
+            grupo=d['grupo'],
+            valor=abs(float(d.get('valor') or 0)),
+        ))
+        db.session.commit()
+    return redirect(url_for('patrimonio'))
+
+@app.route('/patrimonio/editar/<int:id>', methods=['POST'])
+def editar_patrimonio(id):
+    p = Patrimonio.query.get_or_404(id)
+    d = request.form
+    p.nome = d['nome'].strip()
+    if _grupo_valido(p.tipo, d.get('grupo')):
+        p.grupo = d['grupo']
+    p.valor = abs(float(d.get('valor') or 0))
+    p.atualizado_em = datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for('patrimonio'))
+
+@app.route('/patrimonio/excluir/<int:id>', methods=['POST'])
+def excluir_patrimonio(id):
+    p = Patrimonio.query.get_or_404(id)
+    db.session.delete(p)
+    db.session.commit()
+    return redirect(url_for('patrimonio'))
 
 with app.app_context():
     db.create_all()

@@ -19,6 +19,11 @@ app.secret_key = 'financa-pessoal-secret-2024'
 
 db = SQLAlchemy(app)
 
+@app.template_filter('brl_num')
+def brl_num(v):
+    """Formata número no padrão brasileiro: 1.234,56"""
+    return f"{(v or 0):,.2f}".replace(',', '_').replace('.', ',').replace('_', '.')
+
 # ─── MODELS ───────────────────────────────────────────────────────────────────
 
 class Categoria(db.Model):

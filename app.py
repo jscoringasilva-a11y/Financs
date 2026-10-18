@@ -207,10 +207,12 @@ def lancamentos():
 
     lancamentos = query.order_by(Lancamento.data.desc(), Lancamento.criado_em.desc()).paginate(page=page, per_page=20)
     categorias = Categoria.query.order_by(Categoria.tipo, Categoria.nome).all()
+    contas = Conta.query.order_by(Conta.id).all()
 
     return render_template('lancamentos.html',
         lancamentos=lancamentos,
         categorias=categorias,
+        contas=contas,
         filtro_tipo=tipo,
         filtro_categoria=categoria_id,
         filtro_mes=mes
@@ -241,6 +243,7 @@ def editar_lancamento(id):
     l.tipo = data['tipo']
     l.data = datetime.strptime(data['data'], '%Y-%m-%d').date()
     l.categoria_id = int(data['categoria_id']) if data.get('categoria_id') else None
+    l.conta_id = int(data['conta_id']) if data.get('conta_id') else None
     l.observacao = data.get('observacao', '')
     db.session.commit()
     return redirect(request.referrer or url_for('lancamentos'))

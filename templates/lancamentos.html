@@ -49,6 +49,7 @@
                     <th>Data</th>
                     <th>Descrição</th>
                     <th>Categoria</th>
+                    <th>Conta</th>
                     <th>Tipo</th>
                     <th class="text-right">Valor</th>
                     <th></th>
@@ -72,6 +73,13 @@
                         {% endif %}
                     </td>
                     <td>
+                        {% if l.conta %}
+                        <span class="text-sm">{{ l.conta.icone }} {{ l.conta.nome }}</span>
+                        {% else %}
+                        <span class="text-muted text-sm">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
                         {% if l.tipo == 'receita' %}
                         <span class="badge badge-green">↑ Receita</span>
                         {% else %}
@@ -83,7 +91,7 @@
                     </td>
                     <td class="text-right" style="white-space:nowrap">
                         <button class="btn btn-ghost btn-sm" style="border-color:transparent"
-                            onclick="abrirEditar({{ l.id }}, '{{ l.descricao|e }}', {{ l.valor }}, '{{ l.tipo }}', '{{ l.data.strftime('%Y-%m-%d') }}', {{ l.categoria_id or 'null' }}, '{{ l.observacao|e }}')">✏️</button>
+                            onclick="abrirEditar({{ l.id }}, '{{ l.descricao|e }}', {{ l.valor }}, '{{ l.tipo }}', '{{ l.data.strftime('%Y-%m-%d') }}', {{ l.categoria_id or 'null' }}, '{{ l.observacao|e }}', {{ l.conta_id or 'null' }})">✏️</button>
                         <form action="/lancamento/excluir/{{ l.id }}" method="POST" onsubmit="return confirm('Excluir este lançamento?')" style="display:inline">
                             <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red); border-color:transparent">🗑</button>
                         </form>
@@ -148,6 +156,15 @@
                 </div>
             </div>
             <div class="form-group">
+                <label>Conta</label>
+                <select name="conta_id" id="contaSelect">
+                    {% for ct in contas %}
+                    <option value="{{ ct.id }}">{{ ct.icone }} {{ ct.nome }}</option>
+                    {% endfor %}
+                    <option value="">Sem conta</option>
+                </select>
+            </div>
+            <div class="form-group">
                 <label>Categoria</label>
                 <select name="categoria_id" id="categoriaSelect">
                     <option value="">Sem categoria</option>
@@ -193,6 +210,15 @@
                 </div>
             </div>
             <div class="form-group">
+                <label>Conta</label>
+                <select name="conta_id" id="editContaSelect">
+                    <option value="">Sem conta</option>
+                    {% for ct in contas %}
+                    <option value="{{ ct.id }}">{{ ct.icone }} {{ ct.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
                 <label>Categoria</label>
                 <select name="categoria_id" id="editCategoriaSelect">
                     <option value="">Sem categoria</option>
@@ -232,7 +258,7 @@ document.querySelectorAll('.tipo-btn').forEach(btn => {
 // Definir data de hoje no formulário
 document.querySelector('input[name="data"]').value = new Date().toISOString().split('T')[0];
 
-function abrirEditar(id, descricao, valor, tipo, data, categoriaId, observacao) {
+function abrirEditar(id, descricao, valor, tipo, data, categoriaId, observacao, contaId) {
     document.getElementById('formEditar').action = '/lancamento/editar/' + id;
     document.getElementById('editDescricao').value = descricao;
     document.getElementById('editValor').value = valor;
@@ -250,6 +276,9 @@ function abrirEditar(id, descricao, valor, tipo, data, categoriaId, observacao) 
     const catSelect = document.getElementById('editCategoriaSelect');
     if (categoriaId) catSelect.value = categoriaId;
     else catSelect.value = '';
+
+    // Conta
+    document.getElementById('editContaSelect').value = contaId || '';
 
     openModal('modalEditar');
 }

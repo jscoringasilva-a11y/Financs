@@ -19,16 +19,16 @@
 <div class="grid-3 mb-24">
     <div class="card">
         <div class="card-title">Total de Receitas {{ ano }}</div>
-        <div class="card-value" style="color: var(--green)">R$ {{ '%.2f'|format(total_rec)|replace('.', ',') }}</div>
+        <div class="card-value" style="color: var(--green)">R$ {{ (total_rec)|brl_num }}</div>
     </div>
     <div class="card">
         <div class="card-title">Total de Despesas {{ ano }}</div>
-        <div class="card-value" style="color: var(--red)">R$ {{ '%.2f'|format(total_desp)|replace('.', ',') }}</div>
+        <div class="card-value" style="color: var(--red)">R$ {{ (total_desp)|brl_num }}</div>
     </div>
     <div class="card">
         <div class="card-title">Saldo do Ano</div>
         <div class="card-value" style="color: {{ 'var(--green)' if total_rec - total_desp >= 0 else 'var(--red)' }}">
-            R$ {{ '%.2f'|format(total_rec - total_desp)|replace('.', ',') }}
+            R$ {{ (total_rec - total_desp)|brl_num }}
         </div>
     </div>
 </div>
@@ -49,7 +49,7 @@
         <div style="margin-bottom:14px">
             <div class="flex-between mb-8">
                 <span style="font-size:13px; font-weight:500">{{ nome }}</span>
-                <span style="font-size:13px; font-weight:600; color: var(--red)">R$ {{ '%.2f'|format(valor)|replace('.', ',') }}</span>
+                <span style="font-size:13px; font-weight:600; color: var(--red)">R$ {{ (valor)|brl_num }}</span>
             </div>
             <div class="progress-bar" style="height:6px">
                 <div class="progress-fill" style="width:{{ (valor / total_cat * 100)|round }}%; background: var(--red); opacity: 0.7;"></div>
@@ -70,7 +70,7 @@
         <div style="margin-bottom:14px">
             <div class="flex-between mb-8">
                 <span style="font-size:13px; font-weight:500">{{ nome }}</span>
-                <span style="font-size:13px; font-weight:600; color: var(--green)">R$ {{ '%.2f'|format(valor)|replace('.', ',') }}</span>
+                <span style="font-size:13px; font-weight:600; color: var(--green)">R$ {{ (valor)|brl_num }}</span>
             </div>
             <div class="progress-bar" style="height:6px">
                 <div class="progress-fill" style="width:{{ (valor / total_cat_rec * 100)|round }}%; background: var(--green); opacity: 0.8;"></div>
@@ -100,19 +100,19 @@
                 {% for m in meses_data %}
                 <tr>
                     <td style="font-weight:500">{{ m.mes }}</td>
-                    <td class="text-right valor-green">R$ {{ '%.2f'|format(m.receitas)|replace('.', ',') }}</td>
-                    <td class="text-right valor-red">R$ {{ '%.2f'|format(m.despesas)|replace('.', ',') }}</td>
+                    <td class="text-right valor-green">R$ {{ (m.receitas)|brl_num }}</td>
+                    <td class="text-right valor-red">R$ {{ (m.despesas)|brl_num }}</td>
                     <td class="text-right" style="font-weight:600; color: {{ 'var(--green)' if m.saldo >= 0 else 'var(--red)' }}">
-                        R$ {{ '%.2f'|format(m.saldo)|replace('.', ',') }}
+                        R$ {{ (m.saldo)|brl_num }}
                     </td>
                 </tr>
                 {% endfor %}
                 <tr style="border-top: 2px solid var(--border)">
                     <td style="font-weight:700">Total</td>
-                    <td class="text-right valor-green fw-600">R$ {{ '%.2f'|format(total_rec)|replace('.', ',') }}</td>
-                    <td class="text-right valor-red fw-600">R$ {{ '%.2f'|format(total_desp)|replace('.', ',') }}</td>
+                    <td class="text-right valor-green fw-600">R$ {{ (total_rec)|brl_num }}</td>
+                    <td class="text-right valor-red fw-600">R$ {{ (total_desp)|brl_num }}</td>
                     <td class="text-right fw-600" style="color: {{ 'var(--green)' if total_rec - total_desp >= 0 else 'var(--red)' }}">
-                        R$ {{ '%.2f'|format(total_rec - total_desp)|replace('.', ',') }}
+                        R$ {{ (total_rec - total_desp)|brl_num }}
                     </td>
                 </tr>
             </tbody>

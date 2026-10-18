@@ -21,18 +21,18 @@
       <div class="text-right">
         <div class="card-title">Saldo</div>
         <div class="card-value" style="color: {{ 'var(--green)' if r.saldo >= 0 else 'var(--red)' }}">
-          R$ {{ '%.2f'|format(r.saldo)|replace('.', ',') }}
+          R$ {{ (r.saldo)|brl_num }}
         </div>
       </div>
     </div>
     <div style="display:flex; gap:16px; padding-top:16px; border-top:1px solid var(--border)">
       <div>
         <div class="text-sm text-muted">Entradas</div>
-        <div class="valor-green fw-600">R$ {{ '%.2f'|format(r.receitas)|replace('.', ',') }}</div>
+        <div class="valor-green fw-600">R$ {{ (r.receitas)|brl_num }}</div>
       </div>
       <div>
         <div class="text-sm text-muted">Saídas</div>
-        <div class="valor-red fw-600">R$ {{ '%.2f'|format(r.despesas)|replace('.', ',') }}</div>
+        <div class="valor-red fw-600">R$ {{ (r.despesas)|brl_num }}</div>
       </div>
     </div>
   </div>
@@ -45,7 +45,7 @@
     <div>
       <div class="card-title">Saldo Total (todas as contas)</div>
       <div class="card-value" style="color: {{ 'var(--green)' if resumos|sum(attribute='saldo') >= 0 else 'var(--red)' }}">
-        R$ {{ '%.2f'|format(resumos|sum(attribute='saldo'))|replace('.', ',') }}
+        R$ {{ (resumos|sum(attribute='saldo'))|brl_num }}
       </div>
     </div>
     <div style="font-size:40px">💰</div>

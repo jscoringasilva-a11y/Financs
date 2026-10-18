@@ -14,21 +14,21 @@
     <div class="card">
         <div class="card-title">Saldo Total</div>
         <div class="card-value" style="color: {{ 'var(--green)' if saldo_total >= 0 else 'var(--red)' }}">
-            R$ {{ '%.2f'|format(saldo_total)|replace('.', ',') }}
+            R$ {{ (saldo_total)|brl_num }}
         </div>
         <div class="card-sub">Histórico acumulado</div>
     </div>
     <div class="card">
         <div class="card-title">Receitas do Mês</div>
         <div class="card-value" style="color: var(--green)">
-            R$ {{ '%.2f'|format(resumo.receitas)|replace('.', ',') }}
+            R$ {{ (resumo.receitas)|brl_num }}
         </div>
         <div class="card-sub">{{ hoje.strftime('%B de %Y') }}</div>
     </div>
     <div class="card">
         <div class="card-title">Despesas do Mês</div>
         <div class="card-value" style="color: var(--red)">
-            R$ {{ '%.2f'|format(resumo.despesas)|replace('.', ',') }}
+            R$ {{ (resumo.despesas)|brl_num }}
         </div>
         <div class="card-sub">{{ hoje.strftime('%B de %Y') }}</div>
     </div>
@@ -40,7 +40,7 @@
         <div>
             <div class="card-title">Saldo do Mês</div>
             <div class="card-value" style="color: {{ 'var(--green)' if resumo.saldo >= 0 else 'var(--red)' }}">
-                R$ {{ '%.2f'|format(resumo.saldo)|replace('.', ',') }}
+                R$ {{ (resumo.saldo)|brl_num }}
             </div>
         </div>
         {% if resumo.receitas > 0 %}
@@ -101,8 +101,8 @@
                     <div class="progress-fill" style="width: {{ [(meta.valor_atual / meta.valor_alvo * 100), 100]|min if meta.valor_alvo > 0 else 0 }}%; background: var(--purple);"></div>
                 </div>
                 <div class="flex-between text-sm text-muted" style="margin-top:4px">
-                    <span>R$ {{ '%.2f'|format(meta.valor_atual)|replace('.', ',') }}</span>
-                    <span>R$ {{ '%.2f'|format(meta.valor_alvo)|replace('.', ',') }}</span>
+                    <span>R$ {{ (meta.valor_atual)|brl_num }}</span>
+                    <span>R$ {{ (meta.valor_alvo)|brl_num }}</span>
                 </div>
             </div>
             {% endfor %}
@@ -132,7 +132,7 @@
                     </div>
                 </div>
                 <span class="{{ 'valor-green' if l.tipo == 'receita' else 'valor-red' }}" style="font-size:14px">
-                    {{ '+' if l.tipo == 'receita' else '-' }}R$ {{ '%.2f'|format(l.valor)|replace('.', ',') }}
+                    {{ '+' if l.tipo == 'receita' else '-' }}R$ {{ (l.valor)|brl_num }}
                 </span>
             </div>
             {% endfor %}

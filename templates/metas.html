@@ -32,8 +32,8 @@
             <div class="progress-fill" style="width:{{ pct }}%; background: {% if pct >= 100 %}var(--green){% elif pct >= 50 %}var(--blue){% else %}var(--purple){% endif %};"></div>
         </div>
         <div class="flex-between text-sm" style="margin-top:8px">
-            <span class="text-muted">R$ {{ '%.2f'|format(meta.valor_atual)|replace('.', ',') }} acumulado</span>
-            <span style="font-weight:600">Meta: R$ {{ '%.2f'|format(meta.valor_alvo)|replace('.', ',') }}</span>
+            <span class="text-muted">R$ {{ (meta.valor_atual)|brl_num }} acumulado</span>
+            <span style="font-weight:600">Meta: R$ {{ (meta.valor_alvo)|brl_num }}</span>
         </div>
         <div style="margin-top:16px; display:flex; gap:8px">
             <button class="btn btn-ghost btn-sm" style="flex:1" onclick="abrirAtualizar({{ meta.id }}, {{ meta.valor_atual }}, '{{ meta.nome }}')">
@@ -64,7 +64,7 @@
             <div>
                 <div style="font-size:20px; margin-bottom:2px">{{ meta.icone }}</div>
                 <div style="font-size:14px; font-weight:600">{{ meta.nome }}</div>
-                <div class="text-sm text-muted">R$ {{ '%.2f'|format(meta.valor_alvo)|replace('.', ',') }}</div>
+                <div class="text-sm text-muted">R$ {{ (meta.valor_alvo)|brl_num }}</div>
             </div>
             <div>
                 <span class="badge badge-green">✓ Concluída</span>

@@ -79,7 +79,7 @@
                         {% endif %}
                     </td>
                     <td class="text-right {{ 'valor-green' if l.tipo == 'receita' else 'valor-red' }}" style="white-space:nowrap">
-                        {{ '+' if l.tipo == 'receita' else '-' }}R$ {{ '%.2f'|format(l.valor)|replace('.', ',') }}
+                        {{ '+' if l.tipo == 'receita' else '-' }}R$ {{ (l.valor)|brl_num }}
                     </td>
                     <td class="text-right" style="white-space:nowrap">
                         <button class="btn btn-ghost btn-sm" style="border-color:transparent"

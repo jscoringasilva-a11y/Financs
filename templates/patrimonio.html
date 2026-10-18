@@ -7,7 +7,7 @@
 <button class="btn btn-primary" onclick="abrirNovo('ativo')">+ Novo Item</button>
 {% endblock %}
 
-{% macro brl(v) %}R$ {{ '%.2f'|format(v)|replace('.', ',') }}{% endmacro %}
+{% macro brl(v) %}R$ {{ '{:,.2f}'.format(v)|replace(',', '_')|replace('.', ',')|replace('_', '.') }}{% endmacro %}
 
 {% block content %}
 

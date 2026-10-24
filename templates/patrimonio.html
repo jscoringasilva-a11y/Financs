@@ -52,12 +52,19 @@
         {% for i in g.itens %}
         <div class="flex-between" style="padding:10px 0; border-top:1px solid var(--border); gap:8px">
             <div style="min-width:0">
-                <div style="font-size:14px; font-weight:600; overflow-wrap:anywhere">{{ i.nome }}</div>
-                <div class="text-sm text-muted">Atualizado em {{ i.atualizado_em.strftime('%d/%m/%Y') if i.atualizado_em else '—' }}</div>
+                <div style="font-size:14px; font-weight:600; overflow-wrap:anywhere">
+                    {{ i.nome }}
+                    {% if i.auto %}<span class="badge badge-blue" style="margin-left:6px">automático</span>{% endif %}
+                </div>
+                <div class="text-sm text-muted">
+                    {% if i.auto %}Saldo da conta, atualizado pelos lançamentos{% else %}Atualizado em {{ i.atualizado_em.strftime('%d/%m/%Y') if i.atualizado_em else '—' }}{% endif %}
+                </div>
             </div>
             <div class="flex" style="align-items:center; gap:8px">
-                <div style="font-weight:600; white-space:nowrap">{{ brl(i.valor) }}</div>
+                <div style="font-weight:600; white-space:nowrap">{{ brl(i.valor_exib) }}</div>
+                {% if not i.auto %}
                 <button class="btn btn-ghost btn-sm" onclick='abrirEditar({{ i.id }}, {{ i.nome|tojson }}, {{ i.tipo|tojson }}, {{ i.grupo|tojson }}, {{ i.valor }})'>✏️</button>
+                {% endif %}
                 <form action="/patrimonio/excluir/{{ i.id }}" method="POST" onsubmit="return confirm('Excluir este item?')">
                     <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red)">🗑</button>
                 </form>
@@ -100,6 +107,9 @@
             <div class="form-group">
                 <label>Valor atual (R$)</label>
                 <input type="number" name="valor" step="0.01" min="0" placeholder="0,00" required>
+            </div>
+            <div class="text-sm text-muted" style="line-height:1.5; margin-bottom:8px">
+                Dica: em "Dinheiro e contas", um item com o mesmo nome de uma conta (ex.: Poupança) usa o saldo dela automaticamente.
             </div>
             <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
                 <button type="button" class="btn btn-ghost" onclick="closeModal('modalNovo')">Cancelar</button>

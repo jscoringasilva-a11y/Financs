@@ -469,9 +469,38 @@ def api_contas():
     contas = Conta.query.all()
     return jsonify([{'id': c.id, 'nome': c.nome, 'icone': c.icone} for c in contas])
 
+def _saldo_conta(conta, ate=None):
+    """Saldo da conta somando os lançamentos (até uma data, se informada) — mesma lógica da tela Contas."""
+    total = 0
+    for l in conta.lancamentos:
+        if ate is not None and l.data > ate:
+            continue
+        total += l.valor if l.tipo == 'receita' else -l.valor
+    return total
+
+def _valores_patrimonio(itens, ate=None):
+    """Devolve {id_do_item: (valor, automatico)}.
+    Item de ativo do grupo 'Dinheiro e contas' com o MESMO NOME de uma conta (ex.: Poupança)
+    usa o saldo atualizado dessa conta. Nada é gravado no banco."""
+    contas_por_nome = {_norm(c.nome): c for c in Conta.query.all()}
+    resultado = {}
+    for i in itens:
+        conta = None
+        if i.tipo == 'ativo' and i.grupo == 'Dinheiro e contas':
+            conta = contas_por_nome.get(_norm(i.nome))
+        if conta is not None:
+            resultado[i.id] = (_saldo_conta(conta, ate), True)
+        else:
+            resultado[i.id] = (i.valor, False)
+    return resultado
+
 @app.route('/patrimonio')
 def patrimonio():
     itens = Patrimonio.query.order_by(Patrimonio.nome).all()
+    # valor_exib / auto são só para exibição (atributos temporários, não vão para o banco)
+    vals = _valores_patrimonio(itens)
+    for i in itens:
+        i.valor_exib, i.auto = vals[i.id]
     blocos = {}
     for tipo, grupos in GRUPOS_PATRIMONIO.items():
         blocos[tipo] = []
@@ -482,10 +511,10 @@ def patrimonio():
                     'nome': nome_grupo,
                     'icone': icone,
                     'itens': lista,
-                    'total': sum(i.valor for i in lista),
+                    'total': sum(i.valor_exib for i in lista),
                 })
-    total_ativos = sum(i.valor for i in itens if i.tipo == 'ativo')
-    total_passivos = sum(i.valor for i in itens if i.tipo == 'passivo')
+    total_ativos = sum(i.valor_exib for i in itens if i.tipo == 'ativo')
+    total_passivos = sum(i.valor_exib for i in itens if i.tipo == 'passivo')
     return render_template('patrimonio.html',
         blocos=blocos,
         total_ativos=total_ativos,
@@ -558,10 +587,12 @@ def _calcular_fechamento(ano, mes):
     saldo_contas = sum(l.valor if l.tipo == 'receita' else -l.valor for l in ate_fim)
 
     itens = Patrimonio.query.order_by(Patrimonio.nome).all()
-    total_ativos = sum(i.valor for i in itens if i.tipo == 'ativo')
-    total_passivos = sum(i.valor for i in itens if i.tipo == 'passivo')
+    # Itens ligados a uma conta (ex.: Poupança) entram com o saldo da conta até o fim do mês fechado
+    vals = _valores_patrimonio(itens, ate=fim)
+    total_ativos = sum(vals[i.id][0] for i in itens if i.tipo == 'ativo')
+    total_passivos = sum(vals[i.id][0] for i in itens if i.tipo == 'passivo')
     detalhes = [
-        {'id': i.id, 'nome': i.nome, 'tipo': i.tipo, 'grupo': i.grupo, 'valor': i.valor}
+        {'id': i.id, 'nome': i.nome, 'tipo': i.tipo, 'grupo': i.grupo, 'valor': vals[i.id][0]}
         for i in itens
     ]
     return {
@@ -955,19 +986,21 @@ def _mcp_patrimonio(args):
     itens = Patrimonio.query.order_by(Patrimonio.nome).all()
     if not itens:
         return 'Nenhum item de patrimônio cadastrado.', False
+    vals = _valores_patrimonio(itens)
     linhas = []
     for tipo, titulo in (('ativo', 'ATIVOS'), ('passivo', 'PASSIVOS')):
         do_tipo = [i for i in itens if i.tipo == tipo]
-        linhas.append(f'{titulo}: {_rs(sum(i.valor for i in do_tipo))}')
+        linhas.append(f'{titulo}: {_rs(sum(vals[i.id][0] for i in do_tipo))}')
         for grupo, _icone in GRUPOS_PATRIMONIO[tipo]:
             lista = [i for i in do_tipo if i.grupo == grupo]
             if not lista:
                 continue
-            linhas.append(f'  {grupo}: {_rs(sum(i.valor for i in lista))}')
+            linhas.append(f'  {grupo}: {_rs(sum(vals[i.id][0] for i in lista))}')
             for i in lista:
-                linhas.append(f'    - {i.nome}: {_rs(i.valor)} (atualizado em {_data_br(i.atualizado_em)})')
-    ativos = sum(i.valor for i in itens if i.tipo == 'ativo')
-    passivos = sum(i.valor for i in itens if i.tipo == 'passivo')
+                origem = 'saldo automático da conta' if vals[i.id][1] else f'atualizado em {_data_br(i.atualizado_em)}'
+                linhas.append(f'    - {i.nome}: {_rs(vals[i.id][0])} ({origem})')
+    ativos = sum(vals[i.id][0] for i in itens if i.tipo == 'ativo')
+    passivos = sum(vals[i.id][0] for i in itens if i.tipo == 'passivo')
     linhas.append(f'PATRIMÔNIO LÍQUIDO: {_rs(ativos - passivos)}')
     return '\n'.join(linhas), False
 

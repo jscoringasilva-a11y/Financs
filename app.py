@@ -1,7 +1,9 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import json
+import hmac
+import unicodedata
 from collections import defaultdict
 import calendar
 
@@ -697,6 +699,267 @@ def excluir_fechamento(id):
     db.session.delete(f)
     db.session.commit()
     return redirect(url_for('fechamento'))
+
+# ─── CONECTOR COM O CLAUDE (MCP) ──────────────────────────────────────────────
+# Só funciona se existir a variável MCP_TOKEN no Railway (mínimo 24 caracteres).
+# O endereço do conector é  /mcp/<MCP_TOKEN>  — o token funciona como chave de acesso.
+# Não existe ferramenta de apagar nem de editar: o Claude só consulta e lança.
+
+MCP_VERSOES = ['2025-06-18', '2025-03-26', '2024-11-05']
+
+def _hoje_brasil():
+    # O servidor roda em UTC; horário de Brasília = UTC-3
+    return (datetime.utcnow() - timedelta(hours=3)).date()
+
+def _norm(txt):
+    t = unicodedata.normalize('NFKD', str(txt or '')).encode('ascii', 'ignore').decode()
+    return t.strip().casefold()
+
+def _parse_valor(v):
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v or '').replace('R$', '').replace(' ', '').strip()
+    if ',' in s:
+        s = s.replace('.', '').replace(',', '.')
+    return float(s)
+
+def _achar_por_nome(itens, nome):
+    alvo = _norm(nome)
+    exatos = [i for i in itens if _norm(i.nome) == alvo]
+    if exatos:
+        return exatos[0]
+    parciais = [i for i in itens if alvo and (alvo in _norm(i.nome) or _norm(i.nome) in alvo)]
+    return parciais[0] if len(parciais) == 1 else None
+
+MCP_TOOLS = [
+    {
+        'name': 'listar_categorias_e_contas',
+        'description': 'Lista as contas e as categorias (de receita e de despesa) cadastradas no app de finanças. Use antes de lançar, para escolher categoria e conta com os nomes certos.',
+        'inputSchema': {'type': 'object', 'properties': {}},
+        'annotations': {'readOnlyHint': True},
+    },
+    {
+        'name': 'lancar',
+        'description': 'Registra uma receita ou uma despesa no app de finanças. Confirme com o usuário descrição, valor, tipo, data e conta antes de chamar. O valor é sempre positivo; o tipo diz se é receita ou despesa.',
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'descricao': {'type': 'string', 'description': 'Ex.: Supermercado'},
+                'valor': {'type': 'number', 'description': 'Valor em reais, positivo. Ex.: 80.50'},
+                'tipo': {'type': 'string', 'enum': ['receita', 'despesa']},
+                'data': {'type': 'string', 'description': 'AAAA-MM-DD. Se omitida, usa a data de hoje (Brasília).'},
+                'categoria': {'type': 'string', 'description': 'Nome de uma categoria do mesmo tipo (opcional).'},
+                'conta': {'type': 'string', 'description': 'Nome da conta (opcional; se omitida, usa a primeira conta).'},
+                'observacao': {'type': 'string', 'description': 'Anotação opcional.'},
+            },
+            'required': ['descricao', 'valor', 'tipo'],
+        },
+        'annotations': {'readOnlyHint': False, 'destructiveHint': False},
+    },
+    {
+        'name': 'ultimos_lancamentos',
+        'description': 'Mostra os lançamentos mais recentes do app de finanças.',
+        'inputSchema': {
+            'type': 'object',
+            'properties': {'limite': {'type': 'integer', 'description': 'Quantidade (1 a 30). Padrão 10.'}},
+        },
+        'annotations': {'readOnlyHint': True},
+    },
+    {
+        'name': 'resumo_mes',
+        'description': 'Resumo de um mês: receitas, despesas (sem contar transferências entre contas), resultado e despesas por categoria. Sem parâmetros, usa o mês atual.',
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'ano': {'type': 'integer'},
+                'mes': {'type': 'integer', 'description': '1 a 12'},
+            },
+        },
+        'annotations': {'readOnlyHint': True},
+    },
+]
+
+def _mcp_listar_base(args):
+    cats = Categoria.query.order_by(Categoria.tipo, Categoria.nome).all()
+    todas = Conta.query.order_by(Conta.id).all()
+    linhas = ['Contas (a primeira é a padrão):']
+    linhas += [f'- {c.nome}' for c in todas] or ['- (nenhuma)']
+    linhas.append('Categorias de receita:')
+    linhas += [f'- {c.nome}' for c in cats if c.tipo == 'receita']
+    linhas.append('Categorias de despesa:')
+    linhas += [f'- {c.nome}' for c in cats if c.tipo == 'despesa']
+    return '\n'.join(linhas), False
+
+def _mcp_lancar(args):
+    descricao = str(args.get('descricao') or '').strip()[:200]
+    tipo = _norm(args.get('tipo'))
+    if not descricao:
+        return 'Informe a descrição do lançamento.', True
+    if tipo not in ('receita', 'despesa'):
+        return "O tipo precisa ser 'receita' ou 'despesa'.", True
+    try:
+        valor = round(_parse_valor(args.get('valor')), 2)
+    except (ValueError, TypeError):
+        return 'Valor inválido.', True
+    if valor <= 0 or valor > 100000000:
+        return 'O valor precisa ser maior que zero (sempre positivo).', True
+
+    if args.get('data'):
+        try:
+            data_l = datetime.strptime(str(args['data']).strip(), '%Y-%m-%d').date()
+        except ValueError:
+            return 'Data inválida. Use o formato AAAA-MM-DD.', True
+    else:
+        data_l = _hoje_brasil()
+
+    categoria = None
+    if args.get('categoria'):
+        cats = Categoria.query.filter_by(tipo=tipo).all()
+        categoria = _achar_por_nome(cats, args['categoria'])
+        if categoria is None:
+            nomes = ', '.join(c.nome for c in sorted(cats, key=lambda c: c.nome))
+            return f'Categoria não encontrada para {tipo}. Opções: {nomes}.', True
+
+    todas = Conta.query.order_by(Conta.id).all()
+    conta = None
+    if args.get('conta'):
+        conta = _achar_por_nome(todas, args['conta'])
+        if conta is None:
+            nomes = ', '.join(c.nome for c in todas)
+            return f'Conta não encontrada. Opções: {nomes}.', True
+    elif todas:
+        conta = todas[0]
+
+    try:
+        l = Lancamento(
+            descricao=descricao, valor=valor, tipo=tipo, data=data_l,
+            categoria_id=categoria.id if categoria else None,
+            conta_id=conta.id if conta else None,
+            observacao=str(args.get('observacao') or '')[:500],
+        )
+        db.session.add(l)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return 'Não consegui salvar o lançamento.', True
+
+    texto = (f"Lançamento registrado: {tipo} de R$ {brl_num(valor)} — {descricao} "
+             f"({data_l.strftime('%d/%m/%Y')}). "
+             f"Categoria: {categoria.nome if categoria else 'sem categoria'}. "
+             f"Conta: {conta.nome if conta else 'sem conta'}.")
+    return texto, False
+
+def _mcp_ultimos(args):
+    try:
+        limite = max(1, min(30, int(args.get('limite') or 10)))
+    except (ValueError, TypeError):
+        limite = 10
+    itens = Lancamento.query.order_by(Lancamento.data.desc(), Lancamento.criado_em.desc()).limit(limite).all()
+    if not itens:
+        return 'Nenhum lançamento cadastrado.', False
+    linhas = []
+    for l in itens:
+        sinal = '+' if l.tipo == 'receita' else '-'
+        linhas.append(
+            f"{l.data.strftime('%d/%m/%Y')} | {sinal}R$ {brl_num(l.valor)} | {l.descricao} | "
+            f"{l.categoria.nome if l.categoria else 'sem categoria'} | {l.conta.nome if l.conta else 'sem conta'}"
+        )
+    return '\n'.join(linhas), False
+
+def _mcp_resumo_mes(args):
+    hoje = _hoje_brasil()
+    try:
+        ano = int(args.get('ano') or hoje.year)
+        mes = int(args.get('mes') or hoje.month)
+        inicio = date(ano, mes, 1)
+    except (ValueError, TypeError):
+        return 'Ano ou mês inválido.', True
+    fim = date(ano, mes, calendar.monthrange(ano, mes)[1])
+    lancs = Lancamento.query.filter(Lancamento.data >= inicio, Lancamento.data <= fim).all()
+    reais = [l for l in lancs if not _eh_transferencia(l)]
+    receitas = sum(l.valor for l in reais if l.tipo == 'receita')
+    despesas = sum(l.valor for l in reais if l.tipo == 'despesa')
+    por_cat = defaultdict(float)
+    for l in reais:
+        if l.tipo == 'despesa':
+            por_cat[l.categoria.nome if l.categoria else 'Sem categoria'] += l.valor
+    linhas = [
+        f'Resumo de {mes:02d}/{ano} (sem transferências entre contas):',
+        f'Receitas: R$ {brl_num(receitas)}',
+        f'Despesas: R$ {brl_num(despesas)}',
+        f'Resultado: R$ {brl_num(receitas - despesas)}',
+    ]
+    if por_cat:
+        linhas.append('Despesas por categoria:')
+        for nome, v in sorted(por_cat.items(), key=lambda x: x[1], reverse=True):
+            linhas.append(f'- {nome}: R$ {brl_num(v)}')
+    return '\n'.join(linhas), False
+
+MCP_FUNCOES = {
+    'listar_categorias_e_contas': _mcp_listar_base,
+    'lancar': _mcp_lancar,
+    'ultimos_lancamentos': _mcp_ultimos,
+    'resumo_mes': _mcp_resumo_mes,
+}
+
+def _mcp_executar(msg):
+    """Trata uma mensagem JSON-RPC. Retorna None quando não há resposta (notificações)."""
+    if not isinstance(msg, dict) or 'method' not in msg or msg.get('id') is None:
+        return None
+    id_ = msg['id']
+    metodo = msg['method']
+    params = msg.get('params') or {}
+
+    def ok(resultado):
+        return {'jsonrpc': '2.0', 'id': id_, 'result': resultado}
+
+    def erro(codigo, texto):
+        return {'jsonrpc': '2.0', 'id': id_, 'error': {'code': codigo, 'message': texto}}
+
+    if metodo == 'initialize':
+        pedida = params.get('protocolVersion')
+        versao = pedida if pedida in MCP_VERSOES else MCP_VERSOES[0]
+        return ok({
+            'protocolVersion': versao,
+            'capabilities': {'tools': {}},
+            'serverInfo': {'name': 'financas', 'version': '1.0'},
+        })
+    if metodo == 'ping':
+        return ok({})
+    if metodo == 'tools/list':
+        return ok({'tools': MCP_TOOLS})
+    if metodo == 'tools/call':
+        funcao = MCP_FUNCOES.get(params.get('name'))
+        if funcao is None:
+            return erro(-32602, 'Ferramenta desconhecida.')
+        try:
+            texto, com_erro = funcao(params.get('arguments') or {})
+        except Exception:
+            db.session.rollback()
+            texto, com_erro = 'Erro ao executar a ferramenta.', True
+        return ok({'content': [{'type': 'text', 'text': texto}], 'isError': com_erro})
+    return erro(-32601, 'Método não suportado.')
+
+@app.route('/mcp/<token>', methods=['POST', 'GET', 'DELETE'])
+def mcp(token):
+    esperado = os.environ.get('MCP_TOKEN', '')
+    if len(esperado) < 24 or not hmac.compare_digest(token.encode('utf-8'), esperado.encode('utf-8')):
+        return 'Not Found', 404
+    if request.method != 'POST':
+        return '', 405
+    try:
+        corpo = json.loads(request.get_data(as_text=True))
+    except ValueError:
+        return jsonify({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'JSON inválido.'}}), 400
+    if isinstance(corpo, list):
+        respostas = [r for r in (_mcp_executar(m) for m in corpo) if r is not None]
+        if not respostas:
+            return '', 202
+        return jsonify(respostas)
+    resposta = _mcp_executar(corpo)
+    if resposta is None:
+        return '', 202
+    return jsonify(resposta)
 
 with app.app_context():
     db.create_all()

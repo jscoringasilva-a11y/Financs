@@ -4,6 +4,7 @@ from datetime import datetime, date, timedelta
 import json
 import hmac
 import unicodedata
+from types import SimpleNamespace
 from collections import defaultdict
 import calendar
 
@@ -478,29 +479,36 @@ def _saldo_conta(conta, ate=None):
         total += l.valor if l.tipo == 'receita' else -l.valor
     return total
 
-def _valores_patrimonio(itens, ate=None):
-    """Devolve {id_do_item: (valor, automatico)}.
-    Item de ativo do grupo 'Dinheiro e contas' com o MESMO NOME de uma conta (ex.: Poupança)
-    usa o saldo atualizado dessa conta. Nada é gravado no banco."""
-    contas_por_nome = {_norm(c.nome): c for c in Conta.query.all()}
-    resultado = {}
-    for i in itens:
-        conta = None
-        if i.tipo == 'ativo' and i.grupo == 'Dinheiro e contas':
-            conta = contas_por_nome.get(_norm(i.nome))
+def _itens_patrimonio(ate=None):
+    """Lista os itens do patrimônio já com o valor a usar (valor_exib). Nada é gravado no banco.
+    - Item de ativo do grupo 'Dinheiro e contas' com o MESMO NOME de uma conta usa o saldo dela.
+    - Toda conta (Conta Corrente, Poupança...) que não tenha item correspondente aparece sozinha nesse grupo."""
+    reais = Patrimonio.query.order_by(Patrimonio.nome).all()
+    todas = Conta.query.order_by(Conta.id).all()
+    por_nome = {_norm(c.nome): c for c in todas}
+    lista = []
+    ligadas = set()
+    for i in reais:
+        conta = por_nome.get(_norm(i.nome)) if (i.tipo == 'ativo' and i.grupo == 'Dinheiro e contas') else None
         if conta is not None:
-            resultado[i.id] = (_saldo_conta(conta, ate), True)
+            ligadas.add(conta.id)
+            valor, auto = _saldo_conta(conta, ate), True
         else:
-            resultado[i.id] = (i.valor, False)
-    return resultado
+            valor, auto = i.valor, False
+        lista.append(SimpleNamespace(
+            id=i.id, nome=i.nome, tipo=i.tipo, grupo=i.grupo, valor=i.valor,
+            valor_exib=valor, auto=auto, fixo=False, atualizado_em=i.atualizado_em))
+    for c in todas:
+        if c.id not in ligadas:
+            lista.append(SimpleNamespace(
+                id=f'conta-{c.id}', nome=c.nome, tipo='ativo', grupo='Dinheiro e contas', valor=0,
+                valor_exib=_saldo_conta(c, ate), auto=True, fixo=True, atualizado_em=None))
+    lista.sort(key=lambda x: _norm(x.nome))
+    return lista
 
 @app.route('/patrimonio')
 def patrimonio():
-    itens = Patrimonio.query.order_by(Patrimonio.nome).all()
-    # valor_exib / auto são só para exibição (atributos temporários, não vão para o banco)
-    vals = _valores_patrimonio(itens)
-    for i in itens:
-        i.valor_exib, i.auto = vals[i.id]
+    itens = _itens_patrimonio()
     blocos = {}
     for tipo, grupos in GRUPOS_PATRIMONIO.items():
         blocos[tipo] = []
@@ -586,13 +594,12 @@ def _calcular_fechamento(ano, mes):
     ate_fim = Lancamento.query.filter(Lancamento.conta_id.isnot(None), Lancamento.data <= fim).all()
     saldo_contas = sum(l.valor if l.tipo == 'receita' else -l.valor for l in ate_fim)
 
-    itens = Patrimonio.query.order_by(Patrimonio.nome).all()
-    # Itens ligados a uma conta (ex.: Poupança) entram com o saldo da conta até o fim do mês fechado
-    vals = _valores_patrimonio(itens, ate=fim)
-    total_ativos = sum(vals[i.id][0] for i in itens if i.tipo == 'ativo')
-    total_passivos = sum(vals[i.id][0] for i in itens if i.tipo == 'passivo')
+    # Poupança (e itens ligados a uma conta) entram com o saldo da conta até o fim do mês fechado
+    itens = _itens_patrimonio(ate=fim)
+    total_ativos = sum(i.valor_exib for i in itens if i.tipo == 'ativo')
+    total_passivos = sum(i.valor_exib for i in itens if i.tipo == 'passivo')
     detalhes = [
-        {'id': i.id, 'nome': i.nome, 'tipo': i.tipo, 'grupo': i.grupo, 'valor': vals[i.id][0]}
+        {'id': i.id, 'nome': i.nome, 'tipo': i.tipo, 'grupo': i.grupo, 'valor': i.valor_exib}
         for i in itens
     ]
     return {
@@ -983,24 +990,23 @@ def _data_br(d):
     return d.strftime('%d/%m/%Y') if d else '—'
 
 def _mcp_patrimonio(args):
-    itens = Patrimonio.query.order_by(Patrimonio.nome).all()
+    itens = _itens_patrimonio()
     if not itens:
         return 'Nenhum item de patrimônio cadastrado.', False
-    vals = _valores_patrimonio(itens)
     linhas = []
     for tipo, titulo in (('ativo', 'ATIVOS'), ('passivo', 'PASSIVOS')):
         do_tipo = [i for i in itens if i.tipo == tipo]
-        linhas.append(f'{titulo}: {_rs(sum(vals[i.id][0] for i in do_tipo))}')
+        linhas.append(f'{titulo}: {_rs(sum(i.valor_exib for i in do_tipo))}')
         for grupo, _icone in GRUPOS_PATRIMONIO[tipo]:
             lista = [i for i in do_tipo if i.grupo == grupo]
             if not lista:
                 continue
-            linhas.append(f'  {grupo}: {_rs(sum(vals[i.id][0] for i in lista))}')
+            linhas.append(f'  {grupo}: {_rs(sum(i.valor_exib for i in lista))}')
             for i in lista:
-                origem = 'saldo automático da conta' if vals[i.id][1] else f'atualizado em {_data_br(i.atualizado_em)}'
-                linhas.append(f'    - {i.nome}: {_rs(vals[i.id][0])} ({origem})')
-    ativos = sum(vals[i.id][0] for i in itens if i.tipo == 'ativo')
-    passivos = sum(vals[i.id][0] for i in itens if i.tipo == 'passivo')
+                origem = 'saldo automático da conta' if i.auto else f'atualizado em {_data_br(i.atualizado_em)}'
+                linhas.append(f'    - {i.nome}: {_rs(i.valor_exib)} ({origem})')
+    ativos = sum(i.valor_exib for i in itens if i.tipo == 'ativo')
+    passivos = sum(i.valor_exib for i in itens if i.tipo == 'passivo')
     linhas.append(f'PATRIMÔNIO LÍQUIDO: {_rs(ativos - passivos)}')
     return '\n'.join(linhas), False
 

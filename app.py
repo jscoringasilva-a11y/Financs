@@ -777,6 +777,53 @@ MCP_TOOLS = [
         },
         'annotations': {'readOnlyHint': True},
     },
+    {
+        'name': 'consultar_patrimonio',
+        'description': 'Mostra o patrimônio: ativos e passivos por grupo, item a item, com totais e patrimônio líquido.',
+        'inputSchema': {'type': 'object', 'properties': {}},
+        'annotations': {'readOnlyHint': True},
+    },
+    {
+        'name': 'consultar_contas',
+        'description': 'Mostra o saldo de cada conta (entradas, saídas e saldo) e o saldo total.',
+        'inputSchema': {'type': 'object', 'properties': {}},
+        'annotations': {'readOnlyHint': True},
+    },
+    {
+        'name': 'consultar_metas',
+        'description': 'Mostra as metas financeiras (ativas e concluídas) com valor alvo, valor atual, percentual e prazo.',
+        'inputSchema': {'type': 'object', 'properties': {}},
+        'annotations': {'readOnlyHint': True},
+    },
+    {
+        'name': 'consultar_fechamentos',
+        'description': 'Mostra todos os meses já fechados: receitas, despesas, resultado, ativos, passivos, patrimônio líquido e a variação em relação ao mês anterior.',
+        'inputSchema': {'type': 'object', 'properties': {}},
+        'annotations': {'readOnlyHint': True},
+    },
+    {
+        'name': 'resumo_ano',
+        'description': 'Resumo de um ano: receitas, despesas e resultado mês a mês (sem transferências entre contas), mais totais por categoria. Sem parâmetros, usa o ano atual.',
+        'inputSchema': {'type': 'object', 'properties': {'ano': {'type': 'integer'}}},
+        'annotations': {'readOnlyHint': True},
+    },
+    {
+        'name': 'buscar_lancamentos',
+        'description': 'Busca lançamentos com filtros (todos opcionais): texto na descrição, tipo, categoria, conta e período. Mostra os mais recentes e os totais do filtro.',
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'texto': {'type': 'string', 'description': 'Trecho da descrição.'},
+                'tipo': {'type': 'string', 'enum': ['receita', 'despesa']},
+                'categoria': {'type': 'string', 'description': 'Nome da categoria.'},
+                'conta': {'type': 'string', 'description': 'Nome da conta.'},
+                'data_inicio': {'type': 'string', 'description': 'AAAA-MM-DD'},
+                'data_fim': {'type': 'string', 'description': 'AAAA-MM-DD'},
+                'limite': {'type': 'integer', 'description': 'Quantos mostrar (1 a 100). Padrão 30.'},
+            },
+        },
+        'annotations': {'readOnlyHint': True},
+    },
 ]
 
 def _mcp_listar_base(args):
@@ -895,11 +942,176 @@ def _mcp_resumo_mes(args):
             linhas.append(f'- {nome}: R$ {brl_num(v)}')
     return '\n'.join(linhas), False
 
+def _rs(v):
+    return 'R$ ' + brl_num(v)
+
+def _rs_sinal(v):
+    return ('+' if v > 0 else '') + 'R$ ' + brl_num(v)
+
+def _data_br(d):
+    return d.strftime('%d/%m/%Y') if d else '—'
+
+def _mcp_patrimonio(args):
+    itens = Patrimonio.query.order_by(Patrimonio.nome).all()
+    if not itens:
+        return 'Nenhum item de patrimônio cadastrado.', False
+    linhas = []
+    for tipo, titulo in (('ativo', 'ATIVOS'), ('passivo', 'PASSIVOS')):
+        do_tipo = [i for i in itens if i.tipo == tipo]
+        linhas.append(f'{titulo}: {_rs(sum(i.valor for i in do_tipo))}')
+        for grupo, _icone in GRUPOS_PATRIMONIO[tipo]:
+            lista = [i for i in do_tipo if i.grupo == grupo]
+            if not lista:
+                continue
+            linhas.append(f'  {grupo}: {_rs(sum(i.valor for i in lista))}')
+            for i in lista:
+                linhas.append(f'    - {i.nome}: {_rs(i.valor)} (atualizado em {_data_br(i.atualizado_em)})')
+    ativos = sum(i.valor for i in itens if i.tipo == 'ativo')
+    passivos = sum(i.valor for i in itens if i.tipo == 'passivo')
+    linhas.append(f'PATRIMÔNIO LÍQUIDO: {_rs(ativos - passivos)}')
+    return '\n'.join(linhas), False
+
+def _mcp_contas(args):
+    todas = Conta.query.order_by(Conta.id).all()
+    if not todas:
+        return 'Nenhuma conta cadastrada.', False
+    linhas = []
+    total = 0
+    for c in todas:
+        rec = sum(l.valor for l in c.lancamentos if l.tipo == 'receita')
+        desp = sum(l.valor for l in c.lancamentos if l.tipo == 'despesa')
+        total += rec - desp
+        linhas.append(f'{c.nome}: saldo {_rs(rec - desp)} (entradas {_rs(rec)} | saídas {_rs(desp)})')
+    linhas.append(f'Saldo total das contas: {_rs(total)}')
+    linhas.append('Obs.: as entradas e saídas incluem transferências entre contas, como na tela Contas.')
+    return '\n'.join(linhas), False
+
+def _mcp_metas(args):
+    metas_ = Meta.query.order_by(Meta.ativa.desc(), Meta.criada_em.desc()).all()
+    if not metas_:
+        return 'Nenhuma meta cadastrada.', False
+    linhas = []
+    for m in metas_:
+        pct = (m.valor_atual / m.valor_alvo * 100) if m.valor_alvo else 0
+        prazo = f", prazo {_data_br(m.prazo)}" if m.prazo else ''
+        status = 'ativa' if m.ativa else 'concluída'
+        linhas.append(f'{m.nome} ({status}): {_rs(m.valor_atual)} de {_rs(m.valor_alvo)} ({pct:.0f}%){prazo}')
+    return '\n'.join(linhas), False
+
+def _mcp_fechamentos(args):
+    regs = Fechamento.query.order_by(Fechamento.ano, Fechamento.mes).all()
+    if not regs:
+        return 'Nenhum mês fechado ainda.', False
+    linhas = []
+    anterior = None
+    for f in regs:
+        partes = [f'{f.periodo}' + (' (informado manualmente)' if f.manual else '')]
+        if f.resultado is not None:
+            partes.append(f'receitas {_rs(f.receitas)} | despesas {_rs(f.despesas)} | resultado {_rs(f.resultado)}')
+        partes.append(f'ativos {_rs(f.total_ativos)} | passivos {_rs(f.total_passivos)} | patrimônio líquido {_rs(f.patrimonio_liquido)}')
+        if anterior is not None:
+            var = f.patrimonio_liquido - anterior.patrimonio_liquido
+            texto = f'variação do patrimônio {_rs_sinal(var)}'
+            if anterior.patrimonio_liquido:
+                texto += f' ({var / abs(anterior.patrimonio_liquido) * 100:+.2f}%)'
+            if f.resultado is not None:
+                texto += f' | outros efeitos {_rs_sinal(var - f.resultado)}'
+            partes.append(texto)
+        linhas.append(' | '.join(partes))
+        anterior = f
+    return '\n'.join(linhas), False
+
+def _mcp_resumo_ano(args):
+    hoje = _hoje_brasil()
+    try:
+        ano = int(args.get('ano') or hoje.year)
+        inicio, fim = date(ano, 1, 1), date(ano, 12, 31)
+    except (ValueError, TypeError):
+        return 'Ano inválido.', True
+    lancs = Lancamento.query.filter(Lancamento.data >= inicio, Lancamento.data <= fim).all()
+    reais = [l for l in lancs if not _eh_transferencia(l)]
+    linhas = [f'Resumo de {ano} (sem transferências entre contas):']
+    tot_r = tot_d = 0
+    for m in range(1, 13):
+        r = sum(l.valor for l in reais if l.data.month == m and l.tipo == 'receita')
+        d = sum(l.valor for l in reais if l.data.month == m and l.tipo == 'despesa')
+        tot_r += r
+        tot_d += d
+        if r or d:
+            linhas.append(f'{MESES_PT[m - 1]}: receitas {_rs(r)} | despesas {_rs(d)} | resultado {_rs(r - d)}')
+    linhas.append(f'TOTAL: receitas {_rs(tot_r)} | despesas {_rs(tot_d)} | resultado {_rs(tot_r - tot_d)}')
+    for tipo, titulo in (('despesa', 'Despesas por categoria'), ('receita', 'Receitas por categoria')):
+        por_cat = defaultdict(float)
+        for l in reais:
+            if l.tipo == tipo:
+                por_cat[l.categoria.nome if l.categoria else 'Sem categoria'] += l.valor
+        if por_cat:
+            linhas.append(f'{titulo}:')
+            for nome, v in sorted(por_cat.items(), key=lambda x: x[1], reverse=True):
+                linhas.append(f'- {nome}: {_rs(v)}')
+    return '\n'.join(linhas), False
+
+def _mcp_buscar(args):
+    filtros = []
+    if args.get('texto'):
+        filtros.append(Lancamento.descricao.ilike('%' + str(args['texto']).strip() + '%'))
+    if args.get('tipo'):
+        tipo = _norm(args['tipo'])
+        if tipo not in ('receita', 'despesa'):
+            return "O tipo precisa ser 'receita' ou 'despesa'.", True
+        filtros.append(Lancamento.tipo == tipo)
+    if args.get('categoria'):
+        cat = _achar_por_nome(Categoria.query.all(), args['categoria'])
+        if cat is None:
+            return 'Categoria não encontrada. Use listar_categorias_e_contas para ver os nomes.', True
+        filtros.append(Lancamento.categoria_id == cat.id)
+    if args.get('conta'):
+        conta = _achar_por_nome(Conta.query.all(), args['conta'])
+        if conta is None:
+            return 'Conta não encontrada. Use listar_categorias_e_contas para ver os nomes.', True
+        filtros.append(Lancamento.conta_id == conta.id)
+    for campo, op in (('data_inicio', '>='), ('data_fim', '<=')):
+        if args.get(campo):
+            try:
+                d = datetime.strptime(str(args[campo]).strip(), '%Y-%m-%d').date()
+            except ValueError:
+                return f'{campo} inválida. Use o formato AAAA-MM-DD.', True
+            filtros.append(Lancamento.data >= d if op == '>=' else Lancamento.data <= d)
+    try:
+        limite = max(1, min(100, int(args.get('limite') or 30)))
+    except (ValueError, TypeError):
+        limite = 30
+
+    q = Lancamento.query.filter(*filtros)
+    total = q.count()
+    if total == 0:
+        return 'Nenhum lançamento encontrado com esses filtros.', False
+    soma = lambda t: db.session.query(db.func.sum(Lancamento.valor)).filter(*filtros, Lancamento.tipo == t).scalar() or 0
+    rec, desp = soma('receita'), soma('despesa')
+    itens = q.order_by(Lancamento.data.desc(), Lancamento.criado_em.desc()).limit(limite).all()
+    linhas = [
+        f'{total} lançamento(s) encontrado(s); mostrando {len(itens)} mais recentes.',
+        f'Totais do filtro: receitas {_rs(rec)} | despesas {_rs(desp)} (transferências entre contas incluídas).',
+    ]
+    for l in itens:
+        sinal = '+' if l.tipo == 'receita' else '-'
+        linhas.append(
+            f"{_data_br(l.data)} | {sinal}R$ {brl_num(l.valor)} | {l.descricao} | "
+            f"{l.categoria.nome if l.categoria else 'sem categoria'} | {l.conta.nome if l.conta else 'sem conta'}"
+        )
+    return '\n'.join(linhas), False
+
 MCP_FUNCOES = {
     'listar_categorias_e_contas': _mcp_listar_base,
     'lancar': _mcp_lancar,
     'ultimos_lancamentos': _mcp_ultimos,
     'resumo_mes': _mcp_resumo_mes,
+    'consultar_patrimonio': _mcp_patrimonio,
+    'consultar_contas': _mcp_contas,
+    'consultar_metas': _mcp_metas,
+    'consultar_fechamentos': _mcp_fechamentos,
+    'resumo_ano': _mcp_resumo_ano,
+    'buscar_lancamentos': _mcp_buscar,
 }
 
 def _mcp_executar(msg):

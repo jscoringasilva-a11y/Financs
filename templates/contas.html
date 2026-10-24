@@ -4,7 +4,10 @@
 {% block page_title %}Contas{% endblock %}
 
 {% block topbar_action %}
-<button class="btn btn-primary" onclick="openModal('modalTransferir')">⇄ Transferir</button>
+<div class="flex gap-8">
+  <button class="btn btn-ghost" onclick="openModal('modalNovaConta')">+ Nova Conta</button>
+  <button class="btn btn-primary" onclick="openModal('modalTransferir')">⇄ Transferir</button>
+</div>
 {% endblock %}
 
 {% block content %}
@@ -15,7 +18,11 @@
     <div class="flex-between mb-16">
       <div>
         <div style="font-size:32px; margin-bottom:4px">{{ r.conta.icone }}</div>
-        <div style="font-size:18px; font-weight:700">{{ r.conta.nome }}</div>
+        <div style="font-size:18px; font-weight:700">
+          {{ r.conta.nome }}
+          <button class="btn btn-ghost btn-sm" style="border-color:transparent" title="Renomear conta"
+                  onclick='abrirEditarConta({{ r.conta.id }}, {{ r.conta.nome|tojson }}, {{ r.conta.icone|tojson }})'>✏️</button>
+        </div>
         <div class="text-sm text-muted">{{ 'Conta Corrente' if r.conta.tipo == 'corrente' else 'Poupança' }}</div>
       </div>
       <div class="text-right">
@@ -89,10 +96,97 @@
   </div>
 </div>
 
+<!-- Modal Nova Conta -->
+<div class="modal-overlay" id="modalNovaConta" onclick="if(event.target===this)closeModal('modalNovaConta')">
+  <div class="modal">
+    <h3>+ Nova conta</h3>
+    <form action="/conta/nova" method="POST">
+      <div class="form-group">
+        <label>Nome</label>
+        <input type="text" name="nome" placeholder="Ex: Conta Corrente PJ" required>
+      </div>
+      <div class="form-group">
+        <label>Tipo</label>
+        <select name="tipo">
+          <option value="corrente">Conta Corrente</option>
+          <option value="poupanca">Poupança</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Ícone</label>
+        <select name="icone">
+          <option value="💳">💳</option>
+          <option value="🏢">🏢</option>
+          <option value="👤">👤</option>
+          <option value="🏦">🏦</option>
+          <option value="🐷">🐷</option>
+          <option value="💰">💰</option>
+        </select>
+      </div>
+      <div class="text-sm text-muted" style="line-height:1.5; margin-bottom:8px">
+        A conta nova aparece sozinha no Patrimônio, com o saldo atualizado pelos lançamentos.
+      </div>
+      <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modalNovaConta')">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Criar conta</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal Renomear Conta -->
+<div class="modal-overlay" id="modalEditarConta" onclick="if(event.target===this)closeModal('modalEditarConta')">
+  <div class="modal">
+    <h3>✏️ Renomear conta</h3>
+    <form id="formEditarConta" action="" method="POST">
+      <div class="form-group">
+        <label>Nome</label>
+        <input type="text" name="nome" id="editContaNome" required>
+      </div>
+      <div class="form-group">
+        <label>Ícone</label>
+        <select name="icone" id="editContaIcone">
+          <option value="💳">💳</option>
+          <option value="🏢">🏢</option>
+          <option value="👤">👤</option>
+          <option value="🏦">🏦</option>
+          <option value="🐷">🐷</option>
+          <option value="💰">💰</option>
+        </select>
+      </div>
+      <div class="text-sm text-muted" style="line-height:1.5; margin-bottom:8px">
+        Os lançamentos da conta continuam os mesmos, só o nome muda.
+      </div>
+      <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modalEditarConta')">Cancelar</button>
+        <button type="submit" class="btn btn-green">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
 document.querySelector('input[name="data"]').value = new Date().toISOString().split('T')[0];
+
+function abrirEditarConta(id, nome, icone) {
+    document.getElementById('formEditarConta').action = '/conta/editar/' + id;
+    document.getElementById('editContaNome').value = nome;
+    const sel = document.getElementById('editContaIcone');
+    if (![...sel.options].some(o => o.value === icone)) {
+        const op = document.createElement('option');
+        op.value = icone; op.textContent = icone;
+        sel.appendChild(op);
+    }
+    sel.value = icone;
+    openModal('modalEditarConta');
+}
+
+// Avisos de erro ao criar/renomear conta
+const erro = new URLSearchParams(window.location.search).get('erro');
+if (erro === 'repetido') showToast('Já existe uma conta com esse nome.', 'error');
+else if (erro === 'dados') showToast('Preencha o nome da conta.', 'error');
 </script>
 {% endblock %}

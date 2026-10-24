@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+
+{% block title %}Fechamento — Finanças Pessoais{% endblock %}
+{% block page_title %}Fechamento Mensal{% endblock %}
+
+{% block topbar_action %}
+<button class="btn btn-primary" onclick="abrirFechar('{{ mes_sugerido }}')">🗓️ Fechar mês</button>
+{% endblock %}
+
+{% block content %}
+
+{% if linhas %}
+{% set ult = linhas[-1] %}
+<!-- Resumo do último fechamento -->
+<div class="grid-3 mb-24">
+    <div class="card">
+        <div class="card-title">Patrimônio líquido — {{ ult.f.periodo }}</div>
+        <div class="card-value" style="color: {{ 'var(--green)' if ult.f.patrimonio_liquido >= 0 else 'var(--red)' }}">
+            R$ {{ ult.f.patrimonio_liquido|brl_num }}
+        </div>
+        <div class="card-sub">Ativos − Passivos no fechamento</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Variação no mês</div>
+        {% if ult.var is not none %}
+        <div class="card-value" style="color: {{ 'var(--green)' if ult.var >= 0 else 'var(--red)' }}">
+            {{ '+' if ult.var > 0 }}R$ {{ ult.var|brl_num }}
+        </div>
+        <div class="card-sub">
+            {% if ult.pct is not none %}{{ '+' if ult.pct > 0 }}{{ '%.2f'|format(ult.pct)|replace('.', ',') }}% sobre o mês anterior{% else %}—{% endif %}
+        </div>
+        {% else %}
+        <div class="card-value text-muted">—</div>
+        <div class="card-sub">Precisa de um mês anterior para comparar</div>
+        {% endif %}
+    </div>
+    <div class="card">
+        <div class="card-title">Resultado do mês</div>
+        {% if ult.f.resultado is not none %}
+        <div class="card-value" style="color: {{ 'var(--green)' if ult.f.resultado >= 0 else 'var(--red)' }}">
+            R$ {{ ult.f.resultado|brl_num }}
+        </div>
+        <div class="card-sub">Receitas − Despesas (sem transferências)</div>
+        {% else %}
+        <div class="card-value text-muted">—</div>
+        <div class="card-sub">Mês informado manualmente</div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Gráfico de evolução -->
+<div class="card mb-24">
+    <div class="card-title">Evolução do patrimônio</div>
+    <canvas id="chartPatrimonio" height="100"></canvas>
+</div>
+
+<!-- Tabela de fechamentos -->
+<div class="card mb-24">
+    <div class="card-title">Meses fechados</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Mês</th>
+                    <th class="text-right">Receitas</th>
+                    <th class="text-right">Despesas</th>
+                    <th class="text-right">Resultado</th>
+                    <th class="text-right">Ativos</th>
+                    <th class="text-right">Passivos</th>
+                    <th class="text-right">Patrimônio líquido</th>
+                    <th class="text-right">Variação</th>
+                    <th class="text-right">Outros efeitos</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ln in linhas_desc %}
+                {% set f = ln.f %}
+                <tr>
+                    <td style="font-weight:600; white-space:nowrap">
+                        {{ f.periodo }}
+                        {% if f.manual %}<span class="badge badge-blue" style="margin-left:6px">manual</span>{% endif %}
+                    </td>
+                    <td class="text-right valor-green" style="white-space:nowrap">{% if f.receitas is not none %}R$ {{ f.receitas|brl_num }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                    <td class="text-right valor-red" style="white-space:nowrap">{% if f.despesas is not none %}R$ {{ f.despesas|brl_num }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                    <td class="text-right" style="white-space:nowrap; font-weight:600; color: {% if f.resultado is none %}var(--text2){% elif f.resultado >= 0 %}var(--green){% else %}var(--red){% endif %}">
+                        {% if f.resultado is not none %}R$ {{ f.resultado|brl_num }}{% else %}—{% endif %}
+                    </td>
+                    <td class="text-right" style="white-space:nowrap">R$ {{ f.total_ativos|brl_num }}</td>
+                    <td class="text-right" style="white-space:nowrap">R$ {{ f.total_passivos|brl_num }}</td>
+                    <td class="text-right" style="white-space:nowrap; font-weight:700; color: {{ 'var(--green)' if f.patrimonio_liquido >= 0 else 'var(--red)' }}">
+                        R$ {{ f.patrimonio_liquido|brl_num }}
+                    </td>
+                    <td class="text-right" style="white-space:nowrap; font-weight:600; color: {% if ln.var is none %}var(--text2){% elif ln.var >= 0 %}var(--green){% else %}var(--red){% endif %}">
+                        {% if ln.var is not none %}
+                            {{ '+' if ln.var > 0 }}R$ {{ ln.var|brl_num }}
+                            {% if ln.pct is not none %}<div class="text-sm">{{ '+' if ln.pct > 0 }}{{ '%.2f'|format(ln.pct)|replace('.', ',') }}%</div>{% endif %}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-right text-muted" style="white-space:nowrap">
+                        {% if ln.outros is not none %}{{ '+' if ln.outros > 0 }}R$ {{ ln.outros|brl_num }}{% else %}—{% endif %}
+                    </td>
+                    <td class="text-right" style="white-space:nowrap">
+                        <a href="/fechamento?ver={{ f.id }}" class="btn btn-ghost btn-sm">Detalhes</a>
+                        {% if not f.manual %}
+                        <button class="btn btn-ghost btn-sm" title="Refazer este fechamento com os dados de hoje" onclick="abrirFechar('{{ f.chave }}')">🔄</button>
+                        {% endif %}
+                        <form action="/fechamento/excluir/{{ f.id }}" method="POST" onsubmit="return confirm('Excluir só o fechamento de {{ f.periodo }}? Seus lançamentos e patrimônio não são afetados.')" style="display:inline">
+                            <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red)">🗑</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="text-sm text-muted" style="margin-top:14px; line-height:1.6">
+        <strong>Outros efeitos</strong> = variação do patrimônio − resultado do mês. É a parte do crescimento que não veio de economia: amortização de financiamento, rendimentos, valorização de bens ou atualização de valores.
+    </div>
+</div>
+
+{% if detalhe %}
+{% set d = detalhe %}
+<!-- Detalhe de um mês -->
+<div class="card mb-24">
+    <div class="flex-between mb-16">
+        <div class="card-title" style="margin:0">Detalhe — {{ d.linha.f.periodo }}</div>
+        <a href="/fechamento" class="btn btn-ghost btn-sm">Fechar detalhe</a>
+    </div>
+
+    <div class="grid-3 mb-16">
+        <div>
+            <div class="text-sm text-muted">Saldo nas contas</div>
+            <div style="font-weight:700">{% if d.linha.f.saldo_contas is not none %}R$ {{ d.linha.f.saldo_contas|brl_num }}{% else %}—{% endif %}</div>
+        </div>
+        <div>
+            <div class="text-sm text-muted">Fechado em</div>
+            <div style="font-weight:700">{{ d.linha.f.fechado_em.strftime('%d/%m/%Y') if d.linha.f.fechado_em else '—' }}</div>
+        </div>
+        <div>
+            <div class="text-sm text-muted">Comparado com</div>
+            <div style="font-weight:700">{% if d.ant and d.tem_ant %}{{ d.ant.periodo }}{% else %}—{% endif %}</div>
+        </div>
+    </div>
+
+    {% if d.itens %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Grupo</th>
+                    <th class="text-right">Anterior</th>
+                    <th class="text-right">Neste mês</th>
+                    <th class="text-right">Variação</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for it in d.itens %}
+                <tr>
+                    <td style="font-weight:500">
+                        {{ it.nome }}
+                        <span class="badge {{ 'badge-green' if it.tipo == 'ativo' else 'badge-red' }}" style="margin-left:6px">{{ 'Ativo' if it.tipo == 'ativo' else 'Passivo' }}</span>
+                        {% if it.novo %}<span class="badge badge-blue" style="margin-left:4px">novo</span>{% endif %}
+                        {% if it.atual is none %}<span class="badge badge-blue" style="margin-left:4px">removido</span>{% endif %}
+                    </td>
+                    <td class="text-muted">{{ it.grupo }}</td>
+                    <td class="text-right text-muted" style="white-space:nowrap">{% if it.anterior is not none %}R$ {{ it.anterior|brl_num }}{% else %}—{% endif %}</td>
+                    <td class="text-right" style="white-space:nowrap">{% if it.atual is not none %}R$ {{ it.atual|brl_num }}{% else %}—{% endif %}</td>
+                    <td class="text-right" style="white-space:nowrap; font-weight:600; color: {% if it.impacto is none or it.impacto == 0 %}var(--text2){% elif it.impacto > 0 %}var(--green){% else %}var(--red){% endif %}">
+                        {% if it.var is not none %}{{ '+' if it.var > 0 }}R$ {{ it.var|brl_num }}{% else %}—{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="text-sm text-muted" style="margin-top:14px; line-height:1.6">
+        Verde = mudança que aumentou seu patrimônio líquido (ativo subiu ou passivo diminuiu). Vermelho = mudança que diminuiu.
+    </div>
+    {% else %}
+    <div class="empty"><p>Este mês foi informado manualmente e não tem itens detalhados.</p></div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card mb-24">
+    <div class="empty">
+        <div class="empty-icon">🗓️</div>
+        <p>Nenhum mês fechado ainda.<br>Confira seus saldos e use o botão <strong>Fechar mês</strong> no começo de cada mês.</p>
+    </div>
+</div>
+{% endif %}
+
+<!-- Patrimônio de um mês anterior (opcional) -->
+<div class="card">
+    <div class="card-title">Informar patrimônio de um mês anterior (opcional)</div>
+    <div class="text-sm text-muted" style="margin-bottom:14px; line-height:1.6">
+        Serve para o gráfico e a comparação já começarem com dois pontos. Informe só os totais daquele mês, como você tinha anotado.
+    </div>
+    <form action="/fechamento/manual" method="POST" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end">
+        <div class="form-group" style="margin:0; flex:1; min-width:140px">
+            <label>Mês</label>
+            <input type="month" name="mes" required>
+        </div>
+        <div class="form-group" style="margin:0; flex:1; min-width:140px">
+            <label>Total de ativos (R$)</label>
+            <input type="number" name="total_ativos" step="0.01" min="0" placeholder="0,00" required>
+        </div>
+        <div class="form-group" style="margin:0; flex:1; min-width:140px">
+            <label>Total de passivos (R$)</label>
+            <input type="number" name="total_passivos" step="0.01" min="0" placeholder="0,00" required>
+        </div>
+        <button type="submit" class="btn btn-ghost" style="height:42px">Salvar</button>
+    </form>
+</div>
+
+<!-- Modal Fechar mês -->
+<div class="modal-overlay" id="modalFechar" onclick="if(event.target===this)closeModal('modalFechar')">
+    <div class="modal">
+        <h3>🗓️ Fechar mês</h3>
+        <form action="/fechamento/fechar" method="POST">
+            <div class="form-group">
+                <label>Mês a fechar</label>
+                <input type="month" name="mes" id="mesFechar" max="{{ mes_max }}" required>
+            </div>
+            <div class="text-sm text-muted" style="line-height:1.6; margin-bottom:8px">
+                Antes de fechar, confira se os saldos das contas batem com os bancos e se o Patrimônio (ativos e passivos) está atualizado. O fechamento guarda uma fotografia dos valores de hoje. Se já existir fechamento deste mês, ele é refeito.
+            </div>
+            <div class="flex gap-8" style="justify-content:flex-end; margin-top:16px">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('modalFechar')">Cancelar</button>
+                <button type="submit" class="btn btn-green">Fechar mês</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function abrirFechar(mes) {
+    document.getElementById('mesFechar').value = mes;
+    openModal('modalFechar');
+}
+
+{% if linhas %}
+const ctxPat = document.getElementById('chartPatrimonio').getContext('2d');
+new Chart(ctxPat, {
+    type: 'line',
+    data: {
+        labels: {{ graf_labels|safe }},
+        datasets: [
+            {
+                label: 'Patrimônio líquido',
+                data: {{ graf_pl|safe }},
+                borderColor: '#4f8ef7',
+                backgroundColor: 'rgba(79,142,247,.12)',
+                fill: true,
+                tension: 0.3,
+                pointBackgroundColor: '#4f8ef7',
+                pointRadius: 5,
+                borderWidth: 3,
+            },
+            {
+                label: 'Ativos',
+                data: {{ graf_ativos|safe }},
+                borderColor: '#10d98a',
+                borderDash: [6, 4],
+                tension: 0.3,
+                pointRadius: 3,
+                borderWidth: 2,
+            },
+            {
+                label: 'Passivos',
+                data: {{ graf_passivos|safe }},
+                borderColor: '#f0466e',
+                borderDash: [6, 4],
+                tension: 0.3,
+                pointRadius: 3,
+                borderWidth: 2,
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+            legend: { labels: { color: '#7c8db5', font: { size: 12 } } },
+            tooltip: {
+                callbacks: {
+                    label: c => c.dataset.label + ': R$ ' + c.parsed.y.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})
+                }
+            }
+        },
+        scales: {
+            x: { ticks: { color: '#7c8db5' }, grid: { color: 'rgba(30,39,64,.5)' } },
+            y: {
+                ticks: { color: '#7c8db5', callback: v => 'R$ ' + v.toLocaleString('pt-BR') },
+                grid: { color: 'rgba(30,39,64,.5)' }
+            }
+        }
+    }
+});
+{% endif %}
+</script>
+{% endblock %}

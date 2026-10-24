@@ -65,9 +65,11 @@
                 {% if not i.auto %}
                 <button class="btn btn-ghost btn-sm" onclick='abrirEditar({{ i.id }}, {{ i.nome|tojson }}, {{ i.tipo|tojson }}, {{ i.grupo|tojson }}, {{ i.valor }})'>✏️</button>
                 {% endif %}
+                {% if not i.fixo %}
                 <form action="/patrimonio/excluir/{{ i.id }}" method="POST" onsubmit="return confirm('Excluir este item?')">
                     <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--red)">🗑</button>
                 </form>
+                {% endif %}
             </div>
         </div>
         {% endfor %}

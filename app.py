@@ -465,6 +465,40 @@ def transferir():
     db.session.commit()
     return redirect(url_for('contas'))
 
+def _nome_conta_repetido(nome, ignorar_id=None):
+    alvo = _norm(nome)
+    return any(_norm(c.nome) == alvo and c.id != ignorar_id for c in Conta.query.all())
+
+@app.route('/conta/nova', methods=['POST'])
+def nova_conta():
+    nome = (request.form.get('nome') or '').strip()[:100]
+    tipo = request.form.get('tipo')
+    if not nome or tipo not in ('corrente', 'poupanca'):
+        return redirect(url_for('contas', erro='dados'))
+    if _nome_conta_repetido(nome):
+        return redirect(url_for('contas', erro='repetido'))
+    padrao = '🐷' if tipo == 'poupanca' else '💳'
+    icone = (request.form.get('icone') or padrao)[:10]
+    db.session.add(Conta(
+        nome=nome, tipo=tipo, icone=icone,
+        cor='#10d98a' if tipo == 'poupanca' else '#4f8ef7'))
+    db.session.commit()
+    return redirect(url_for('contas'))
+
+@app.route('/conta/editar/<int:id>', methods=['POST'])
+def editar_conta(id):
+    c = Conta.query.get_or_404(id)
+    nome = (request.form.get('nome') or '').strip()[:100]
+    if not nome:
+        return redirect(url_for('contas', erro='dados'))
+    if _nome_conta_repetido(nome, ignorar_id=c.id):
+        return redirect(url_for('contas', erro='repetido'))
+    c.nome = nome
+    if request.form.get('icone'):
+        c.icone = request.form['icone'][:10]
+    db.session.commit()
+    return redirect(url_for('contas'))
+
 @app.route('/api/contas')
 def api_contas():
     contas = Conta.query.all()

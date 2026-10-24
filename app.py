@@ -90,6 +90,41 @@ class Patrimonio(db.Model):
     valor = db.Column(db.Float, nullable=False, default=0)
     atualizado_em = db.Column(db.DateTime, default=datetime.utcnow)
 
+MESES_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+
+class Fechamento(db.Model):
+    """Fotografia mensal: resultado do mês + ativos/passivos no momento do fechamento."""
+    id = db.Column(db.Integer, primary_key=True)
+    ano = db.Column(db.Integer, nullable=False)
+    mes = db.Column(db.Integer, nullable=False)
+    receitas = db.Column(db.Float)          # vazio quando o mês foi informado manualmente
+    despesas = db.Column(db.Float)
+    saldo_contas = db.Column(db.Float)
+    total_ativos = db.Column(db.Float, nullable=False, default=0)
+    total_passivos = db.Column(db.Float, nullable=False, default=0)
+    manual = db.Column(db.Boolean, default=False)
+    detalhes = db.Column(db.Text)           # JSON com cada item do patrimônio na data
+    fechado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint('ano', 'mes', name='uq_fechamento_ano_mes'),)
+
+    @property
+    def patrimonio_liquido(self):
+        return (self.total_ativos or 0) - (self.total_passivos or 0)
+
+    @property
+    def resultado(self):
+        if self.receitas is None or self.despesas is None:
+            return None
+        return self.receitas - self.despesas
+
+    @property
+    def periodo(self):
+        return f"{MESES_PT[self.mes - 1]}/{self.ano}"
+
+    @property
+    def chave(self):
+        return f"{self.ano}-{self.mes:02d}"
+
 # ─── SEED DATA ────────────────────────────────────────────────────────────────
 
 def seed_categorias():
@@ -490,6 +525,178 @@ def excluir_patrimonio(id):
     db.session.delete(p)
     db.session.commit()
     return redirect(url_for('patrimonio'))
+
+# ─── FECHAMENTO MENSAL ────────────────────────────────────────────────────────
+
+def _parse_mes(texto):
+    """Converte 'AAAA-MM' em (ano, mes). Retorna None se for inválido."""
+    try:
+        ano, mes = texto.split('-')
+        ano, mes = int(ano), int(mes)
+        if 2000 <= ano <= 2100 and 1 <= mes <= 12:
+            return ano, mes
+    except (AttributeError, ValueError):
+        pass
+    return None
+
+def _eh_transferencia(l):
+    # Transferências entre contas não são receita nem despesa de verdade
+    return (l.descricao or '').startswith(('Transferência →', 'Transferência ←'))
+
+def _calcular_fechamento(ano, mes):
+    inicio = date(ano, mes, 1)
+    fim = date(ano, mes, calendar.monthrange(ano, mes)[1])
+
+    do_mes = Lancamento.query.filter(Lancamento.data >= inicio, Lancamento.data <= fim).all()
+    receitas = sum(l.valor for l in do_mes if l.tipo == 'receita' and not _eh_transferencia(l))
+    despesas = sum(l.valor for l in do_mes if l.tipo == 'despesa' and not _eh_transferencia(l))
+
+    # Saldo das contas até o último dia do mês (mesma lógica da tela Contas)
+    ate_fim = Lancamento.query.filter(Lancamento.conta_id.isnot(None), Lancamento.data <= fim).all()
+    saldo_contas = sum(l.valor if l.tipo == 'receita' else -l.valor for l in ate_fim)
+
+    itens = Patrimonio.query.order_by(Patrimonio.nome).all()
+    total_ativos = sum(i.valor for i in itens if i.tipo == 'ativo')
+    total_passivos = sum(i.valor for i in itens if i.tipo == 'passivo')
+    detalhes = [
+        {'id': i.id, 'nome': i.nome, 'tipo': i.tipo, 'grupo': i.grupo, 'valor': i.valor}
+        for i in itens
+    ]
+    return {
+        'receitas': receitas,
+        'despesas': despesas,
+        'saldo_contas': saldo_contas,
+        'total_ativos': total_ativos,
+        'total_passivos': total_passivos,
+        'detalhes': json.dumps(detalhes),
+    }
+
+@app.route('/fechamento')
+def fechamento():
+    hoje = date.today()
+    regs = Fechamento.query.order_by(Fechamento.ano, Fechamento.mes).all()
+
+    linhas = []
+    anterior = None
+    for f in regs:
+        var = pct = outros = None
+        if anterior is not None:
+            var = f.patrimonio_liquido - anterior.patrimonio_liquido
+            if anterior.patrimonio_liquido:
+                pct = var / abs(anterior.patrimonio_liquido) * 100
+            if f.resultado is not None:
+                outros = var - f.resultado
+        linhas.append({'f': f, 'var': var, 'pct': pct, 'outros': outros})
+        anterior = f
+
+    # Detalhe de um mês (item a item, comparado com o fechamento anterior)
+    detalhe = None
+    ver = request.args.get('ver', type=int)
+    if ver:
+        for i, ln in enumerate(linhas):
+            if ln['f'].id != ver:
+                continue
+            atual = json.loads(ln['f'].detalhes or '[]')
+            ant_f = linhas[i - 1]['f'] if i > 0 else None
+            ant_lista = json.loads(ant_f.detalhes or '[]') if ant_f else []
+            tem_ant = bool(ant_lista)
+            mapa_ant = {x['id']: x for x in ant_lista}
+            mapa_atual = {x['id']: x for x in atual}
+            itens = []
+            for x in atual:
+                p = mapa_ant.get(x['id'])
+                itens.append({
+                    'nome': x['nome'], 'tipo': x['tipo'], 'grupo': x['grupo'],
+                    'atual': x['valor'],
+                    'anterior': p['valor'] if p else None,
+                    'novo': tem_ant and p is None,
+                })
+            for x in ant_lista:
+                if x['id'] not in mapa_atual:
+                    itens.append({
+                        'nome': x['nome'], 'tipo': x['tipo'], 'grupo': x['grupo'],
+                        'atual': None, 'anterior': x['valor'], 'novo': False,
+                    })
+            for it in itens:
+                it['var'] = (it['atual'] or 0) - (it['anterior'] or 0) if tem_ant else None
+                if it['var'] is None:
+                    it['impacto'] = None
+                else:
+                    it['impacto'] = it['var'] if it['tipo'] == 'ativo' else -it['var']
+            itens.sort(key=lambda it: (0 if it['tipo'] == 'ativo' else 1, it['grupo'], it['nome']))
+            detalhe = {'linha': ln, 'itens': itens, 'tem_ant': tem_ant, 'ant': ant_f}
+            break
+
+    # Mês sugerido para fechar: o mês anterior ao atual
+    m_ant, a_ant = hoje.month - 1, hoje.year
+    if m_ant == 0:
+        m_ant, a_ant = 12, a_ant - 1
+    mes_sugerido = f"{a_ant}-{m_ant:02d}"
+
+    return render_template('fechamento.html',
+        linhas=linhas,
+        linhas_desc=list(reversed(linhas)),
+        detalhe=detalhe,
+        mes_sugerido=mes_sugerido,
+        mes_max=hoje.strftime('%Y-%m'),
+        graf_labels=json.dumps([ln['f'].periodo for ln in linhas]),
+        graf_pl=json.dumps([round(ln['f'].patrimonio_liquido, 2) for ln in linhas]),
+        graf_ativos=json.dumps([round(ln['f'].total_ativos or 0, 2) for ln in linhas]),
+        graf_passivos=json.dumps([round(ln['f'].total_passivos or 0, 2) for ln in linhas]),
+    )
+
+@app.route('/fechamento/fechar', methods=['POST'])
+def fechar_mes():
+    alvo = _parse_mes(request.form.get('mes', ''))
+    hoje = date.today()
+    if alvo and (alvo[0], alvo[1]) <= (hoje.year, hoje.month):
+        ano, mes = alvo
+        dados = _calcular_fechamento(ano, mes)
+        f = Fechamento.query.filter_by(ano=ano, mes=mes).first()
+        if f is None:
+            f = Fechamento(ano=ano, mes=mes)
+            db.session.add(f)
+        f.receitas = dados['receitas']
+        f.despesas = dados['despesas']
+        f.saldo_contas = dados['saldo_contas']
+        f.total_ativos = dados['total_ativos']
+        f.total_passivos = dados['total_passivos']
+        f.detalhes = dados['detalhes']
+        f.manual = False
+        f.fechado_em = datetime.utcnow()
+        db.session.commit()
+        return redirect(url_for('fechamento', ver=f.id))
+    return redirect(url_for('fechamento'))
+
+@app.route('/fechamento/manual', methods=['POST'])
+def fechamento_manual():
+    """Para informar à mão o patrimônio de um mês que já passou (ex.: o mês anterior ao primeiro fechamento)."""
+    alvo = _parse_mes(request.form.get('mes', ''))
+    if alvo:
+        ano, mes = alvo
+        ativos = abs(float(request.form.get('total_ativos') or 0))
+        passivos = abs(float(request.form.get('total_passivos') or 0))
+        f = Fechamento.query.filter_by(ano=ano, mes=mes).first()
+        if f is None:
+            db.session.add(Fechamento(
+                ano=ano, mes=mes, total_ativos=ativos, total_passivos=passivos, manual=True
+            ))
+            db.session.commit()
+        elif f.manual:
+            f.total_ativos = ativos
+            f.total_passivos = passivos
+            f.fechado_em = datetime.utcnow()
+            db.session.commit()
+        # Mês já fechado pelo app: não sobrescreve
+    return redirect(url_for('fechamento'))
+
+@app.route('/fechamento/excluir/<int:id>', methods=['POST'])
+def excluir_fechamento(id):
+    # Remove só a fotografia do fechamento; lançamentos e patrimônio não são afetados
+    f = Fechamento.query.get_or_404(id)
+    db.session.delete(f)
+    db.session.commit()
+    return redirect(url_for('fechamento'))
 
 with app.app_context():
     db.create_all()

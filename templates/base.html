@@ -440,6 +440,9 @@
         <a href="/categorias" class="nav-link {% if request.endpoint == 'categorias' %}active{% endif %}">
             <span class="nav-icon">🏷️</span> Categorias
         </a>
+        <a href="/backup" class="nav-link {% if request.endpoint in ('backup', 'backup_baixar', 'backup_restaurar') %}active{% endif %}">
+            <span class="nav-icon">💾</span> Backup
+        </a>
     </nav>
 </aside>
 

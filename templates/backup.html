@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Backup — Finanças Pessoais{% endblock %}
+{% block page_title %}Backup{% endblock %}
+
+{% block content %}
+
+{% if erro %}
+<div class="card mb-24" style="border-color:var(--red)">
+    <div style="color:var(--red); font-weight:600">{{ erro }}</div>
+</div>
+{% endif %}
+
+{% if resultado %}
+<div class="card mb-24">
+    <div class="card-title">Restauração concluída</div>
+    <div class="text-sm text-muted" style="margin-bottom:12px">Só foi acrescentado o que faltava. O que já existia não foi alterado.</div>
+    {% for nome, r in resultado.items() %}
+    <div class="flex-between" style="padding:8px 0; border-top:1px solid var(--border)">
+        <div style="font-weight:600">{{ nome }}</div>
+        <div class="text-sm">
+            <span style="color:var(--green); font-weight:600">{{ r.novos }} acrescentado(s)</span>
+            · {{ r.ja }} já existia(m)
+            {% if r.ign %}· <span style="color:var(--red)">{{ r.ign }} linha(s) ignorada(s)</span>{% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="grid-2 mb-24">
+    <div class="card">
+        <div class="card-title">1. Baixar backup</div>
+        <p class="text-sm text-muted" style="line-height:1.6; margin:8px 0 16px">
+            Baixa uma planilha Excel com tudo: lançamentos (geral e uma aba por mês), contas, categorias, metas, patrimônio e fechamentos.
+            Guarde o arquivo em um lugar seguro (por exemplo, uma vez por mês, depois de fechar o mês).
+        </p>
+        <a href="/backup/baixar" class="btn btn-primary">⬇ Baixar planilha (.xlsx)</a>
+    </div>
+
+    <div class="card">
+        <div class="card-title">2. Restaurar backup</div>
+        <p class="text-sm text-muted" style="line-height:1.6; margin:8px 0 16px">
+            Use se o banco falhar. Escolha a planilha baixada aqui: entra só o que estiver faltando.
+            Nada do que já está no app é apagado ou alterado, e subir a mesma planilha duas vezes não duplica nada.
+        </p>
+        <form action="/backup/restaurar" method="POST" enctype="multipart/form-data"
+              onsubmit="return confirm('Restaurar a partir desta planilha? Só será acrescentado o que estiver faltando.')">
+            <div class="form-group">
+                <input type="file" name="arquivo" accept=".xlsx" required>
+            </div>
+            <button type="submit" class="btn btn-green">⬆ Restaurar da planilha</button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">O que está no app agora</div>
+    {% for nome, qtd in contagens %}
+    <div class="flex-between" style="padding:8px 0; border-top:1px solid var(--border)">
+        <div>{{ nome }}</div>
+        <div style="font-weight:600">{{ qtd }}</div>
+    </div>
+    {% endfor %}
+</div>
+
+{% endblock %}

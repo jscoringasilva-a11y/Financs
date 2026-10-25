@@ -57,7 +57,7 @@
                     {% if i.auto %}<span class="badge badge-blue" style="margin-left:6px">automático</span>{% endif %}
                 </div>
                 <div class="text-sm text-muted">
-                    {% if i.auto %}Saldo da conta, atualizado pelos lançamentos{% else %}Atualizado em {{ i.atualizado_em.strftime('%d/%m/%Y') if i.atualizado_em else '—' }}{% endif %}
+                    {% if i.cartao %}Dívida do cartão, atualizada pelos lançamentos{% if i.a_vencer > 0 %} — inclui {{ brl(i.a_vencer) }} de parcelas a vencer{% endif %}{% elif i.auto %}Saldo da conta, atualizado pelos lançamentos{% else %}Atualizado em {{ i.atualizado_em.strftime('%d/%m/%Y') if i.atualizado_em else '—' }}{% endif %}
                 </div>
             </div>
             <div class="flex" style="align-items:center; gap:8px">

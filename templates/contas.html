@@ -14,6 +14,8 @@
 
 <div class="grid-2 mb-24">
   {% for r in resumos %}
+  {% set eh_cartao = r.conta.tipo == 'cartao' %}
+  {% set fatura = 0 - r.saldo %}
   <div class="card">
     <div class="flex-between mb-16">
       <div>
@@ -23,24 +25,45 @@
           <button class="btn btn-ghost btn-sm" style="border-color:transparent" title="Renomear conta"
                   onclick='abrirEditarConta({{ r.conta.id }}, {{ r.conta.nome|tojson }}, {{ r.conta.icone|tojson }})'>✏️</button>
         </div>
-        <div class="text-sm text-muted">{{ 'Conta Corrente' if r.conta.tipo == 'corrente' else 'Poupança' }}</div>
+        <div class="text-sm text-muted">{{ 'Cartão de crédito' if eh_cartao else ('Conta Corrente' if r.conta.tipo == 'corrente' else 'Poupança') }}</div>
       </div>
       <div class="text-right">
+        {% if eh_cartao %}
+        <div class="card-title">Dívida em aberto</div>
+        <div class="card-value" style="color: {{ 'var(--red)' if fatura > 0 else 'var(--green)' }}">
+          R$ {{ fatura|brl_num }}
+        </div>
+        {% if fatura > 0 %}
+        <div class="text-sm text-muted" style="margin-top:4px">
+          Já vencido: R$ {{ r.exigivel|brl_num }}<br>
+          Parcelas a vencer: R$ {{ r.a_vencer|brl_num }}
+        </div>
+        {% endif %}
+        {% else %}
         <div class="card-title">Saldo</div>
         <div class="card-value" style="color: {{ 'var(--green)' if r.saldo >= 0 else 'var(--red)' }}">
           R$ {{ (r.saldo)|brl_num }}
         </div>
+        {% endif %}
       </div>
     </div>
-    <div style="display:flex; gap:16px; padding-top:16px; border-top:1px solid var(--border)">
+    <div style="display:flex; gap:16px; padding-top:16px; border-top:1px solid var(--border); align-items:flex-end">
       <div>
-        <div class="text-sm text-muted">Entradas</div>
+        <div class="text-sm text-muted">{{ 'Pagamentos' if eh_cartao else 'Entradas' }}</div>
         <div class="valor-green fw-600">R$ {{ (r.receitas)|brl_num }}</div>
       </div>
       <div>
-        <div class="text-sm text-muted">Saídas</div>
+        <div class="text-sm text-muted">{{ 'Compras' if eh_cartao else 'Saídas' }}</div>
         <div class="valor-red fw-600">R$ {{ (r.despesas)|brl_num }}</div>
       </div>
+      {% if eh_cartao %}
+      <div style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" onclick="abrirParcelada({{ r.conta.id }}, {{ r.conta.nome|tojson }})">Compra parcelada</button>
+        {% if r.exigivel > 0 %}
+        <button class="btn btn-green btn-sm" onclick="pagarFatura({{ r.conta.id }}, {{ '%.2f'|format(r.exigivel) }})">Pagar o vencido</button>
+        {% endif %}
+      </div>
+      {% endif %}
     </div>
   </div>
   {% endfor %}
@@ -50,10 +73,13 @@
 <div class="card mb-24">
   <div class="flex-between">
     <div>
-      <div class="card-title">Saldo Total (todas as contas)</div>
-      <div class="card-value" style="color: {{ 'var(--green)' if resumos|sum(attribute='saldo') >= 0 else 'var(--red)' }}">
-        R$ {{ (resumos|sum(attribute='saldo'))|brl_num }}
+      <div class="card-title">Saldo Total{% if tem_cartao %} (sem o cartão){% else %} (todas as contas){% endif %}</div>
+      <div class="card-value" style="color: {{ 'var(--green)' if saldo_total >= 0 else 'var(--red)' }}">
+        R$ {{ saldo_total|brl_num }}
       </div>
+      {% if tem_cartao %}
+      <div class="card-sub">Dívida nos cartões (inclui parcelas a vencer): R$ {{ fatura_total|brl_num }}</div>
+      {% endif %}
     </div>
     <div style="font-size:40px">💰</div>
   </div>
@@ -66,7 +92,7 @@
     <form action="/conta/transferir" method="POST">
       <div class="form-group">
         <label>De (origem)</label>
-        <select name="origem_id" required>
+        <select name="origem_id" id="transfOrigem" required>
           {% for r in resumos %}
           <option value="{{ r.conta.id }}">{{ r.conta.icone }} {{ r.conta.nome }}</option>
           {% endfor %}
@@ -74,7 +100,7 @@
       </div>
       <div class="form-group">
         <label>Para (destino)</label>
-        <select name="destino_id" required>
+        <select name="destino_id" id="transfDestino" required>
           {% for r in resumos %}
           <option value="{{ r.conta.id }}">{{ r.conta.icone }} {{ r.conta.nome }}</option>
           {% endfor %}
@@ -82,7 +108,7 @@
       </div>
       <div class="form-group">
         <label>Valor (R$)</label>
-        <input type="number" name="valor" step="0.01" min="0.01" placeholder="0,00" required>
+        <input type="number" name="valor" id="transfValor" step="0.01" min="0.01" placeholder="0,00" required>
       </div>
       <div class="form-group">
         <label>Data</label>
@@ -91,6 +117,52 @@
       <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
         <button type="button" class="btn btn-ghost" onclick="closeModal('modalTransferir')">Cancelar</button>
         <button type="submit" class="btn btn-primary">Transferir</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal Compra parcelada no cartão -->
+<div class="modal-overlay" id="modalParcelada" onclick="if(event.target===this)closeModal('modalParcelada')">
+  <div class="modal">
+    <h3>🧾 Compra parcelada</h3>
+    <form id="formParcelada" action="" method="POST">
+      <div class="text-sm text-muted" style="margin-bottom:12px" id="parceladaCartao"></div>
+      <div class="form-group">
+        <label>Descrição</label>
+        <input type="text" name="descricao" placeholder="Ex: Notebook, Geladeira..." required>
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label>Valor total (R$)</label>
+          <input type="number" name="valor" step="0.01" min="0.01" placeholder="0,00" required>
+        </div>
+        <div class="form-group">
+          <label>Parcelas</label>
+          <input type="number" name="parcelas" min="2" max="48" placeholder="Ex: 6" required>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label>Data da compra</label>
+          <input type="date" name="data" id="parceladaData" value="{{ hoje_str }}" required>
+        </div>
+        <div class="form-group">
+          <label>Categoria</label>
+          <select name="categoria_id">
+            <option value="">Sem categoria</option>
+            {% for cat in categorias_despesa %}
+            <option value="{{ cat.id }}">{{ cat.icone }} {{ cat.nome }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="text-sm text-muted" style="line-height:1.5; margin-bottom:8px">
+        O valor total entra na dívida do cartão (Passivos) e na despesa do mês da compra. A 1ª parcela vence no mês da compra; as demais ficam como "parcelas a vencer" e só são pagas quando vencem.
+      </div>
+      <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modalParcelada')">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Lançar compra</button>
       </div>
     </form>
   </div>
@@ -110,6 +182,7 @@
         <select name="tipo">
           <option value="corrente">Conta Corrente</option>
           <option value="poupanca">Poupança</option>
+          <option value="cartao">Cartão de crédito (fatura entra nos Passivos)</option>
         </select>
       </div>
       <div class="form-group">
@@ -124,7 +197,7 @@
         </select>
       </div>
       <div class="text-sm text-muted" style="line-height:1.5; margin-bottom:8px">
-        A conta nova aparece sozinha no Patrimônio, com o saldo atualizado pelos lançamentos.
+        A conta nova aparece sozinha no Patrimônio, com o saldo atualizado pelos lançamentos. Cartão de crédito aparece em Passivos.
       </div>
       <div class="flex gap-8" style="justify-content:flex-end; margin-top:8px">
         <button type="button" class="btn btn-ghost" onclick="closeModal('modalNovaConta')">Cancelar</button>
@@ -170,6 +243,13 @@
 {% block scripts %}
 <script>
 document.querySelector('input[name="data"]').value = new Date().toISOString().split('T')[0];
+document.getElementById('parceladaData').value = new Date().toISOString().split('T')[0];
+
+function abrirParcelada(cartaoId, nome) {
+    document.getElementById('formParcelada').action = '/cartao/compra-parcelada/' + cartaoId;
+    document.getElementById('parceladaCartao').textContent = 'Cartão: ' + nome;
+    openModal('modalParcelada');
+}
 
 function abrirEditarConta(id, nome, icone) {
     document.getElementById('formEditarConta').action = '/conta/editar/' + id;
@@ -184,9 +264,22 @@ function abrirEditarConta(id, nome, icone) {
     openModal('modalEditarConta');
 }
 
+// Pagar fatura: abre a transferência já com o cartão como destino e o valor da fatura
+function pagarFatura(cartaoId, valor) {
+    const destino = document.getElementById('transfDestino');
+    const origem = document.getElementById('transfOrigem');
+    destino.value = cartaoId;
+    if (origem.value == cartaoId) {
+        const outra = [...origem.options].find(o => o.value != cartaoId);
+        if (outra) origem.value = outra.value;
+    }
+    document.getElementById('transfValor').value = valor;
+    openModal('modalTransferir');
+}
+
 // Avisos de erro ao criar/renomear conta
 const erro = new URLSearchParams(window.location.search).get('erro');
 if (erro === 'repetido') showToast('Já existe uma conta com esse nome.', 'error');
-else if (erro === 'dados') showToast('Preencha o nome da conta.', 'error');
+else if (erro === 'dados') showToast('Confira os dados informados.', 'error');
 </script>
 {% endblock %}

@@ -225,6 +225,22 @@
                 <label>Mês a fechar</label>
                 <input type="month" name="mes" id="mesFechar" max="{{ mes_max }}" required>
             </div>
+            {% for cf in cartoes_fatura %}
+            <div class="form-group">
+                <label>Pagar {{ cf.conta.nome }} (dívida em aberto R$ {{ cf.fatura|brl_num }}) com</label>
+                <select name="pagar_com_{{ cf.conta.id }}">
+                    <option value="">Não pagar agora</option>
+                    {% for c in contas_pagamento %}
+                    <option value="{{ c.id }}">{{ c.icone }} {{ c.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endfor %}
+            {% if cartoes_fatura %}
+            <div class="text-sm text-muted" style="line-height:1.6; margin-bottom:8px">
+                Se escolher uma conta, o app paga só o que já venceu até o mês fechado (compras à vista e parcelas do mês), com a data de hoje, que é quando o dinheiro sai. Parcelas de meses futuros continuam em aberto no passivo. Se o mês fechado já passou, a dívida dele continua no passivo naquela data, porque o pagamento só acontece hoje. Não vira despesa nova: as compras já foram contadas quando você lançou. Se deixar "Não pagar agora", a fatura continua em aberto.
+            </div>
+            {% endif %}
             <div class="text-sm text-muted" style="line-height:1.6; margin-bottom:8px">
                 Antes de fechar, confira se os saldos das contas batem com os bancos e se o Patrimônio (ativos e passivos) está atualizado. O fechamento guarda uma fotografia dos valores de hoje. Se já existir fechamento deste mês, ele é refeito.
             </div>

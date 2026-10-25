@@ -58,10 +58,8 @@
       </div>
       {% if eh_cartao %}
       <div style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end">
-        <button class="btn btn-ghost btn-sm" onclick="abrirParcelada({{ r.conta.id }}, {{ r.conta.nome|tojson }})">Compra parcelada</button>
-        {% if r.exigivel > 0 %}
-        <button class="btn btn-green btn-sm" onclick="pagarFatura({{ r.conta.id }}, {{ '%.2f'|format(r.exigivel) }})">Pagar o vencido</button>
-        {% endif %}
+        <button class="btn btn-ghost btn-sm" onclick='abrirParcelada({{ r.conta.id }}, {{ r.conta.nome|tojson }})'>Compra parcelada</button>
+        <button class="btn {{ 'btn-green' if r.exigivel > 0 else 'btn-ghost' }} btn-sm" onclick="pagarFatura({{ r.conta.id }}, {{ '%.2f'|format(r.exigivel) }})">Pagar o vencido</button>
       </div>
       {% endif %}
     </div>
@@ -266,6 +264,10 @@ function abrirEditarConta(id, nome, icone) {
 
 // Pagar fatura: abre a transferência já com o cartão como destino e o valor da fatura
 function pagarFatura(cartaoId, valor) {
+    if (!(valor > 0)) {
+        showToast('Não há valor vencido para pagar neste cartão.', 'error');
+        return;
+    }
     const destino = document.getElementById('transfDestino');
     const origem = document.getElementById('transfOrigem');
     destino.value = cartaoId;

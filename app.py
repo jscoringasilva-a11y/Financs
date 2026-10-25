@@ -135,6 +135,30 @@ class Parcelamento(db.Model):
     lancamento_id = db.Column(db.Integer, db.ForeignKey('lancamento.id'), nullable=False, unique=True)
     parcelas = db.Column(db.Integer, nullable=False, default=1)
 
+class ParcelamentoInicio(db.Model):
+    """Opcional: mês em que a 1ª parcela vence, quando não é o mês da compra
+    (ex.: compra em outubro com a fatura de outubro já fechada e 1ª parcela em dezembro)."""
+    id = db.Column(db.Integer, primary_key=True)
+    lancamento_id = db.Column(db.Integer, db.ForeignKey('lancamento.id'), nullable=False, unique=True)
+    ano = db.Column(db.Integer, nullable=False)
+    mes = db.Column(db.Integer, nullable=False)
+
+def _parse_mes(txt):
+    """'2026-12' -> (2026, 12). Vazio -> None. Inválido -> ValueError."""
+    txt = (txt or '').strip()
+    if not txt:
+        return None
+    t = txt.replace('/', '-')
+    partes = t.split('-')
+    if len(partes) != 2:
+        raise ValueError('mês inválido')
+    if len(partes[0]) != 4:          # aceita também MM/AAAA
+        partes = partes[::-1]
+    ano, mes = int(partes[0]), int(partes[1])
+    if not (2000 <= ano <= 2100 and 1 <= mes <= 12):
+        raise ValueError('mês inválido')
+    return ano, mes
+
 # ─── SEED DATA ────────────────────────────────────────────────────────────────
 
 def seed_categorias():
@@ -297,6 +321,7 @@ def editar_lancamento(id):
 def excluir_lancamento(id):
     l = Lancamento.query.get_or_404(id)
     Parcelamento.query.filter_by(lancamento_id=l.id).delete()
+    ParcelamentoInicio.query.filter_by(lancamento_id=l.id).delete()
     db.session.delete(l)
     db.session.commit()
     return redirect(request.referrer or url_for('lancamentos'))
@@ -482,12 +507,20 @@ def compra_parcelada(id):
     descricao = (f.get('descricao') or '').strip()[:190]
     if not descricao or valor <= 0 or not (2 <= n <= 48):
         return redirect(url_for('contas', erro='dados'))
+    try:
+        inicio = _parse_mes(f.get('primeira_parcela'))
+    except ValueError:
+        return redirect(url_for('contas', erro='dados'))
+    if inicio and inicio < (data_c.year, data_c.month):
+        return redirect(url_for('contas', erro='dados'))
     l = Lancamento(descricao=f'{descricao} ({n}x)', valor=valor, tipo='despesa', data=data_c,
                    categoria_id=int(f['categoria_id']) if f.get('categoria_id') else None,
                    conta_id=cartao.id)
     db.session.add(l)
     db.session.flush()
     db.session.add(Parcelamento(lancamento_id=l.id, parcelas=n))
+    if inicio and inicio != (data_c.year, data_c.month):
+        db.session.add(ParcelamentoInicio(lancamento_id=l.id, ano=inicio[0], mes=inicio[1]))
     db.session.commit()
     return redirect(url_for('contas'))
 
@@ -574,7 +607,9 @@ def _mapa_parcelas(cartao):
     ids = [l.id for l in cartao.lancamentos if l.tipo == 'despesa']
     if not ids:
         return {}
-    return {p.lancamento_id: p.parcelas
+    inicios = {i.lancamento_id: (i.ano, i.mes)
+               for i in ParcelamentoInicio.query.filter(ParcelamentoInicio.lancamento_id.in_(ids)).all()}
+    return {p.lancamento_id: (p.parcelas, inicios.get(p.lancamento_id))
             for p in Parcelamento.query.filter(Parcelamento.lancamento_id.in_(ids)).all()}
 
 def _fatura_cartao(cartao, ate, pagos_ate=None):
@@ -589,12 +624,13 @@ def _fatura_cartao(cartao, ate, pagos_ate=None):
         if l.tipo != 'despesa' or l.data > ate:
             continue
         compras += l.valor
-        n = mapa.get(l.id, 1)
+        n, inicio = mapa.get(l.id, (1, None))
         if n <= 1:
             vencido += l.valor
         else:
-            k = (ate.year - l.data.year) * 12 + ate.month - l.data.month + 1
-            k = max(1, min(n, k))
+            a0, m0 = inicio if inicio else (l.data.year, l.data.month)
+            k = (ate.year - a0) * 12 + ate.month - m0 + 1
+            k = max(0, min(n, k))   # 0 = nenhuma parcela venceu ainda
             vencido += l.valor if k >= n else round(l.valor / n, 2) * k
     pagos = sum(l.valor for l in cartao.lancamentos if l.tipo == 'receita' and l.data <= pagos_ate)
     total = max(round(compras - pagos, 2) + 0.0, 0.0)
@@ -976,6 +1012,7 @@ MCP_TOOLS = [
                 'conta': {'type': 'string', 'description': 'Nome da conta (opcional; se omitida, usa a primeira conta).'},
                 'observacao': {'type': 'string', 'description': 'Anotação opcional.'},
                 'parcelas': {'type': 'integer', 'description': 'Só para despesa no cartão de crédito: número de parcelas (2 a 48). O valor informado é o TOTAL da compra. Padrão 1 (à vista).'},
+                'primeira_parcela': {'type': 'string', 'description': 'Opcional, só com parcelas: mês em que a 1ª parcela vence, no formato AAAA-MM (ex.: 2026-12). Se omitido, é o mês da compra.'},
             },
             'required': ['descricao', 'valor', 'tipo'],
         },
@@ -1108,9 +1145,16 @@ def _mcp_lancar(args):
         return 'Número de parcelas inválido.', True
     if parcelas < 1 or parcelas > 48:
         return 'O número de parcelas deve ficar entre 1 e 48.', True
+    inicio = None
     if parcelas > 1:
         if tipo != 'despesa' or conta is None or conta.tipo != 'cartao':
             return 'Compra parcelada só vale para despesa no cartão de crédito. Informe a conta do cartão.', True
+        try:
+            inicio = _parse_mes(str(args.get('primeira_parcela') or ''))
+        except ValueError:
+            return "Mês da 1ª parcela inválido. Use o formato AAAA-MM (ex.: 2026-12).", True
+        if inicio and inicio < (data_l.year, data_l.month):
+            return 'A 1ª parcela não pode ser anterior ao mês da compra.', True
         descricao = f'{descricao[:190]} ({parcelas}x)'
 
     try:
@@ -1124,6 +1168,8 @@ def _mcp_lancar(args):
         if parcelas > 1:
             db.session.flush()
             db.session.add(Parcelamento(lancamento_id=l.id, parcelas=parcelas))
+            if inicio and inicio != (data_l.year, data_l.month):
+                db.session.add(ParcelamentoInicio(lancamento_id=l.id, ano=inicio[0], mes=inicio[1]))
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -1136,6 +1182,8 @@ def _mcp_lancar(args):
     if parcelas > 1:
         texto += (f" Parcelado em {parcelas}x de aproximadamente R$ {brl_num(valor / parcelas)}: "
                   "o total entra na dívida do cartão e as parcelas futuras ficam a vencer.")
+        if inicio:
+            texto += f" A 1ª parcela vence em {inicio[1]:02d}/{inicio[0]}."
     return texto, False
 
 def _mcp_ultimos(args):

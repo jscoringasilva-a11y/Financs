@@ -128,6 +128,13 @@ class Fechamento(db.Model):
     def chave(self):
         return f"{self.ano}-{self.mes:02d}"
 
+class Parcelamento(db.Model):
+    """Marca uma compra no cartão como parcelada em N vezes (a 1ª parcela vence no mês da compra).
+    O valor total fica no lançamento; aqui só guardamos o número de parcelas."""
+    id = db.Column(db.Integer, primary_key=True)
+    lancamento_id = db.Column(db.Integer, db.ForeignKey('lancamento.id'), nullable=False, unique=True)
+    parcelas = db.Column(db.Integer, nullable=False, default=1)
+
 # ─── SEED DATA ────────────────────────────────────────────────────────────────
 
 def seed_categorias():
@@ -289,6 +296,7 @@ def editar_lancamento(id):
 @app.route('/lancamento/excluir/<int:id>', methods=['POST'])
 def excluir_lancamento(id):
     l = Lancamento.query.get_or_404(id)
+    Parcelamento.query.filter_by(lancamento_id=l.id).delete()
     db.session.delete(l)
     db.session.commit()
     return redirect(request.referrer or url_for('lancamentos'))
@@ -433,14 +441,55 @@ def seed_contas():
 
 @app.route('/contas')
 def contas():
-    todas = Conta.query.all()
+    todas = Conta.query.order_by(Conta.id).all()
     resumos = []
     for c in todas:
         rec = sum(l.valor for l in c.lancamentos if l.tipo == 'receita')
         desp = sum(l.valor for l in c.lancamentos if l.tipo == 'despesa')
-        resumos.append({'conta': c, 'saldo': rec - desp, 'receitas': rec, 'despesas': desp})
+        saldo = round(rec - desp, 2) + 0.0
+        exigivel = a_vencer = 0
+        if c.tipo == 'cartao':
+            # já vencido até o fim do mês atual; o resto são parcelas a vencer
+            _, exigivel, _ = _fatura_cartao(c, _fim_mes(_hoje_brasil()), pagos_ate=date.max)
+            exigivel = min(exigivel, max(0 - saldo, 0))
+            a_vencer = max(round((0 - saldo) - exigivel, 2) + 0.0, 0.0)
+        resumos.append({'conta': c, 'saldo': saldo, 'receitas': rec, 'despesas': desp,
+                        'exigivel': exigivel, 'a_vencer': a_vencer})
+    # Cartão de crédito não entra no saldo total: é dívida (fatura), mostrada à parte
+    saldo_total = sum(r['saldo'] for r in resumos if r['conta'].tipo != 'cartao')
+    fatura_total = sum(0 - r['saldo'] for r in resumos if r['conta'].tipo == 'cartao')
+    tem_cartao = any(r['conta'].tipo == 'cartao' for r in resumos)
+    categorias_despesa = Categoria.query.filter_by(tipo='despesa').order_by(Categoria.nome).all()
     hoje = date.today()
-    return render_template('contas.html', resumos=resumos, hoje_str=hoje.strftime('%Y-%m-%d'))
+    return render_template('contas.html', resumos=resumos, hoje_str=hoje.strftime('%Y-%m-%d'),
+                           saldo_total=saldo_total, fatura_total=fatura_total, tem_cartao=tem_cartao,
+                           categorias_despesa=categorias_despesa)
+
+@app.route('/cartao/compra-parcelada/<int:id>', methods=['POST'])
+def compra_parcelada(id):
+    """Compra parcelada no cartão: o total entra na dívida do cartão (passivo) e na despesa do mês da
+    compra; as parcelas de meses futuros ficam 'a vencer' e só são pagas quando vencem."""
+    cartao = Conta.query.get_or_404(id)
+    if cartao.tipo != 'cartao':
+        return redirect(url_for('contas'))
+    f = request.form
+    try:
+        valor = round(float(f['valor']), 2)
+        n = int(f['parcelas'])
+        data_c = datetime.strptime(f['data'], '%Y-%m-%d').date()
+    except (KeyError, ValueError):
+        return redirect(url_for('contas', erro='dados'))
+    descricao = (f.get('descricao') or '').strip()[:190]
+    if not descricao or valor <= 0 or not (2 <= n <= 48):
+        return redirect(url_for('contas', erro='dados'))
+    l = Lancamento(descricao=f'{descricao} ({n}x)', valor=valor, tipo='despesa', data=data_c,
+                   categoria_id=int(f['categoria_id']) if f.get('categoria_id') else None,
+                   conta_id=cartao.id)
+    db.session.add(l)
+    db.session.flush()
+    db.session.add(Parcelamento(lancamento_id=l.id, parcelas=n))
+    db.session.commit()
+    return redirect(url_for('contas'))
 
 @app.route('/conta/transferir', methods=['POST'])
 def transferir():
@@ -473,15 +522,14 @@ def _nome_conta_repetido(nome, ignorar_id=None):
 def nova_conta():
     nome = (request.form.get('nome') or '').strip()[:100]
     tipo = request.form.get('tipo')
-    if not nome or tipo not in ('corrente', 'poupanca'):
+    if not nome or tipo not in ('corrente', 'poupanca', 'cartao'):
         return redirect(url_for('contas', erro='dados'))
     if _nome_conta_repetido(nome):
         return redirect(url_for('contas', erro='repetido'))
     padrao = '🐷' if tipo == 'poupanca' else '💳'
     icone = (request.form.get('icone') or padrao)[:10]
-    db.session.add(Conta(
-        nome=nome, tipo=tipo, icone=icone,
-        cor='#10d98a' if tipo == 'poupanca' else '#4f8ef7'))
+    cores = {'poupanca': '#10d98a', 'cartao': '#f0466e', 'corrente': '#4f8ef7'}
+    db.session.add(Conta(nome=nome, tipo=tipo, icone=icone, cor=cores[tipo]))
     db.session.commit()
     return redirect(url_for('contas'))
 
@@ -511,7 +559,53 @@ def _saldo_conta(conta, ate=None):
         if ate is not None and l.data > ate:
             continue
         total += l.valor if l.tipo == 'receita' else -l.valor
-    return total
+    return round(total, 2) + 0.0
+
+def _valor_conta_patrimonio(conta, ate=None):
+    """Conta comum: o saldo. Cartão de crédito: a dívida em aberto (inclui parcelas a vencer), que é o saldo com sinal trocado."""
+    saldo = _saldo_conta(conta, ate)
+    return (round(0 - saldo, 2) + 0.0) if conta.tipo == 'cartao' else saldo
+
+def _fim_mes(d):
+    return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+
+def _mapa_parcelas(cartao):
+    """{id do lançamento: nº de parcelas} das compras parceladas deste cartão."""
+    ids = [l.id for l in cartao.lancamentos if l.tipo == 'despesa']
+    if not ids:
+        return {}
+    return {p.lancamento_id: p.parcelas
+            for p in Parcelamento.query.filter(Parcelamento.lancamento_id.in_(ids)).all()}
+
+def _fatura_cartao(cartao, ate, pagos_ate=None):
+    """Devolve (total em aberto, já vencido, a vencer) do cartão.
+    - total: compras até `ate` menos os pagamentos até `pagos_ate` (inclui parcelas de meses futuros)
+    - já vencido: compras à vista + parcelas cujo mês já chegou (até o mês de `ate`), menos os pagamentos
+    - a vencer: parcelas de meses seguintes, que continuam em aberto"""
+    pagos_ate = pagos_ate or ate
+    mapa = _mapa_parcelas(cartao)
+    compras = vencido = 0
+    for l in cartao.lancamentos:
+        if l.tipo != 'despesa' or l.data > ate:
+            continue
+        compras += l.valor
+        n = mapa.get(l.id, 1)
+        if n <= 1:
+            vencido += l.valor
+        else:
+            k = (ate.year - l.data.year) * 12 + ate.month - l.data.month + 1
+            k = max(1, min(n, k))
+            vencido += l.valor if k >= n else round(l.valor / n, 2) * k
+    pagos = sum(l.valor for l in cartao.lancamentos if l.tipo == 'receita' and l.data <= pagos_ate)
+    total = max(round(compras - pagos, 2) + 0.0, 0.0)
+    exigivel = min(max(round(vencido - pagos, 2) + 0.0, 0.0), total)
+    return total, exigivel, round(total - exigivel, 2) + 0.0
+
+def _a_vencer(cartao, divida, ate=None):
+    """Parte da dívida do cartão que ainda não venceu (parcelas de meses futuros)."""
+    ref = ate or _fim_mes(_hoje_brasil())
+    _, vencido, _ = _fatura_cartao(cartao, ref, pagos_ate=ate or date.max)
+    return max(round(divida - vencido, 2) + 0.0, 0.0)
 
 def _itens_patrimonio(ate=None):
     """Lista os itens do patrimônio já com o valor a usar (valor_exib). Nada é gravado no banco.
@@ -523,20 +617,33 @@ def _itens_patrimonio(ate=None):
     lista = []
     ligadas = set()
     for i in reais:
-        conta = por_nome.get(_norm(i.nome)) if (i.tipo == 'ativo' and i.grupo == 'Dinheiro e contas') else None
+        conta = por_nome.get(_norm(i.nome))
+        # Item manual só é trocado pelo saldo da conta se estiver no grupo certo:
+        # conta comum -> ativo em "Dinheiro e contas"; cartão -> passivo em "Cartão de crédito"
+        if conta is not None and not (
+            (conta.tipo != 'cartao' and i.tipo == 'ativo' and i.grupo == 'Dinheiro e contas') or
+            (conta.tipo == 'cartao' and i.tipo == 'passivo' and i.grupo == 'Cartão de crédito')):
+            conta = None
         if conta is not None:
             ligadas.add(conta.id)
-            valor, auto = _saldo_conta(conta, ate), True
+            valor, auto = _valor_conta_patrimonio(conta, ate), True
         else:
             valor, auto = i.valor, False
         lista.append(SimpleNamespace(
             id=i.id, nome=i.nome, tipo=i.tipo, grupo=i.grupo, valor=i.valor,
-            valor_exib=valor, auto=auto, fixo=False, atualizado_em=i.atualizado_em))
+            valor_exib=valor, auto=auto, fixo=False, atualizado_em=i.atualizado_em,
+            cartao=conta is not None and conta.tipo == 'cartao',
+            a_vencer=_a_vencer(conta, valor, ate) if (conta is not None and conta.tipo == 'cartao') else 0))
     for c in todas:
         if c.id not in ligadas:
+            eh_cartao = c.tipo == 'cartao'
             lista.append(SimpleNamespace(
-                id=f'conta-{c.id}', nome=c.nome, tipo='ativo', grupo='Dinheiro e contas', valor=0,
-                valor_exib=_saldo_conta(c, ate), auto=True, fixo=True, atualizado_em=None))
+                id=f'conta-{c.id}', nome=c.nome,
+                tipo='passivo' if eh_cartao else 'ativo',
+                grupo='Cartão de crédito' if eh_cartao else 'Dinheiro e contas', valor=0,
+                valor_exib=_valor_conta_patrimonio(c, ate), auto=True, fixo=True,
+                atualizado_em=None, cartao=eh_cartao,
+                a_vencer=_a_vencer(c, _valor_conta_patrimonio(c, ate), ate) if eh_cartao else 0))
     lista.sort(key=lambda x: _norm(x.nome))
     return lista
 
@@ -616,6 +723,29 @@ def _eh_transferencia(l):
     # Transferências entre contas não são receita nem despesa de verdade
     return (l.descricao or '').startswith(('Transferência →', 'Transferência ←'))
 
+def _pagar_fatura(cartao, origem_id, fim_mes):
+    """Paga o que JÁ VENCEU do cartão (compras à vista + parcelas até o mês fechado) com dinheiro
+    da conta escolhida. O pagamento tem a data de HOJE (quando o dinheiro realmente sai): se for
+    feito depois do fim do mês, a dívida daquele mês continua no passivo em 31/mês.
+    Parcelas de meses futuros continuam em aberto. É uma transferência (conta -> cartão), não uma
+    despesa nova: as compras já foram contadas quando lançadas. Se não há nada vencido, não faz nada."""
+    origem = Conta.query.get(origem_id)
+    if origem is None or origem.tipo == 'cartao':
+        return
+    hoje = _hoje_brasil()
+    total_hoje, _, _ = _fatura_cartao(cartao, hoje)
+    _, vencido, _ = _fatura_cartao(cartao, fim_mes, pagos_ate=date.max)
+    valor = round(min(vencido, total_hoje), 2)
+    if valor <= 0:
+        return
+    db.session.add_all([
+        Lancamento(descricao=f'Transferência → {cartao.nome}', valor=valor, tipo='despesa',
+                   data=hoje, conta_id=origem.id, observacao='Pagamento de fatura no fechamento'),
+        Lancamento(descricao=f'Transferência ← {origem.nome}', valor=valor, tipo='receita',
+                   data=hoje, conta_id=cartao.id, observacao='Pagamento de fatura no fechamento'),
+    ])
+    db.session.commit()
+
 def _calcular_fechamento(ano, mes):
     inicio = date(ano, mes, 1)
     fim = date(ano, mes, calendar.monthrange(ano, mes)[1])
@@ -626,7 +756,9 @@ def _calcular_fechamento(ano, mes):
 
     # Saldo das contas até o último dia do mês (mesma lógica da tela Contas)
     ate_fim = Lancamento.query.filter(Lancamento.conta_id.isnot(None), Lancamento.data <= fim).all()
-    saldo_contas = sum(l.valor if l.tipo == 'receita' else -l.valor for l in ate_fim)
+    # Cartão de crédito não é dinheiro em conta: fica fora do saldo (aparece como passivo)
+    saldo_contas = sum(l.valor if l.tipo == 'receita' else -l.valor
+                       for l in ate_fim if l.conta is None or l.conta.tipo != 'cartao')
 
     # Poupança (e itens ligados a uma conta) entram com o saldo da conta até o fim do mês fechado
     itens = _itens_patrimonio(ate=fim)
@@ -707,7 +839,17 @@ def fechamento():
         m_ant, a_ant = 12, a_ant - 1
     mes_sugerido = f"{a_ant}-{m_ant:02d}"
 
+    # Cartões com fatura em aberto: cada um pode ser pago com uma conta ao fechar o mês
+    cartoes_fatura = []
+    for c in Conta.query.filter_by(tipo='cartao').order_by(Conta.id).all():
+        fatura = max(0 - _saldo_conta(c), 0)
+        if fatura > 0:
+            cartoes_fatura.append({'conta': c, 'fatura': fatura})
+    contas_pagamento = Conta.query.filter(Conta.tipo != 'cartao').order_by(Conta.id).all()
+
     return render_template('fechamento.html',
+        cartoes_fatura=cartoes_fatura,
+        contas_pagamento=contas_pagamento,
         linhas=linhas,
         linhas_desc=list(reversed(linhas)),
         detalhe=detalhe,
@@ -725,6 +867,11 @@ def fechar_mes():
     hoje = date.today()
     if alvo and (alvo[0], alvo[1]) <= (hoje.year, hoje.month):
         ano, mes = alvo
+        fim_mes = date(ano, mes, calendar.monthrange(ano, mes)[1])
+        for cartao in Conta.query.filter_by(tipo='cartao').order_by(Conta.id).all():
+            origem_id = request.form.get(f'pagar_com_{cartao.id}', type=int)
+            if origem_id:
+                _pagar_fatura(cartao, origem_id, fim_mes)
         dados = _calcular_fechamento(ano, mes)
         f = Fechamento.query.filter_by(ano=ano, mes=mes).first()
         if f is None:
@@ -801,7 +948,12 @@ def _achar_por_nome(itens, nome):
     if exatos:
         return exatos[0]
     parciais = [i for i in itens if alvo and (alvo in _norm(i.nome) or _norm(i.nome) in alvo)]
-    return parciais[0] if len(parciais) == 1 else None
+    if len(parciais) == 1:
+        return parciais[0]
+    # Todas as palavras do que foi dito aparecem no nome (ex.: "cartao pj" -> "Cartão de Crédito PJ")
+    palavras = set(alvo.split())
+    por_palavras = [i for i in itens if palavras and palavras <= set(_norm(i.nome).split())]
+    return por_palavras[0] if len(por_palavras) == 1 else None
 
 MCP_TOOLS = [
     {
@@ -823,6 +975,7 @@ MCP_TOOLS = [
                 'categoria': {'type': 'string', 'description': 'Nome de uma categoria do mesmo tipo (opcional).'},
                 'conta': {'type': 'string', 'description': 'Nome da conta (opcional; se omitida, usa a primeira conta).'},
                 'observacao': {'type': 'string', 'description': 'Anotação opcional.'},
+                'parcelas': {'type': 'integer', 'description': 'Só para despesa no cartão de crédito: número de parcelas (2 a 48). O valor informado é o TOTAL da compra. Padrão 1 (à vista).'},
             },
             'required': ['descricao', 'valor', 'tipo'],
         },
@@ -950,6 +1103,17 @@ def _mcp_lancar(args):
         conta = todas[0]
 
     try:
+        parcelas = int(args.get('parcelas') or 1)
+    except (ValueError, TypeError):
+        return 'Número de parcelas inválido.', True
+    if parcelas < 1 or parcelas > 48:
+        return 'O número de parcelas deve ficar entre 1 e 48.', True
+    if parcelas > 1:
+        if tipo != 'despesa' or conta is None or conta.tipo != 'cartao':
+            return 'Compra parcelada só vale para despesa no cartão de crédito. Informe a conta do cartão.', True
+        descricao = f'{descricao[:190]} ({parcelas}x)'
+
+    try:
         l = Lancamento(
             descricao=descricao, valor=valor, tipo=tipo, data=data_l,
             categoria_id=categoria.id if categoria else None,
@@ -957,6 +1121,9 @@ def _mcp_lancar(args):
             observacao=str(args.get('observacao') or '')[:500],
         )
         db.session.add(l)
+        if parcelas > 1:
+            db.session.flush()
+            db.session.add(Parcelamento(lancamento_id=l.id, parcelas=parcelas))
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -966,6 +1133,9 @@ def _mcp_lancar(args):
              f"({data_l.strftime('%d/%m/%Y')}). "
              f"Categoria: {categoria.nome if categoria else 'sem categoria'}. "
              f"Conta: {conta.nome if conta else 'sem conta'}.")
+    if parcelas > 1:
+        texto += (f" Parcelado em {parcelas}x de aproximadamente R$ {brl_num(valor / parcelas)}: "
+                  "o total entra na dívida do cartão e as parcelas futuras ficam a vencer.")
     return texto, False
 
 def _mcp_ultimos(args):
@@ -1050,12 +1220,24 @@ def _mcp_contas(args):
         return 'Nenhuma conta cadastrada.', False
     linhas = []
     total = 0
+    faturas = 0
     for c in todas:
         rec = sum(l.valor for l in c.lancamentos if l.tipo == 'receita')
         desp = sum(l.valor for l in c.lancamentos if l.tipo == 'despesa')
-        total += rec - desp
-        linhas.append(f'{c.nome}: saldo {_rs(rec - desp)} (entradas {_rs(rec)} | saídas {_rs(desp)})')
-    linhas.append(f'Saldo total das contas: {_rs(total)}')
+        saldo = round(rec - desp, 2) + 0.0
+        if c.tipo == 'cartao':
+            fatura = round(0 - saldo, 2) + 0.0
+            faturas += fatura
+            _, vencido, _ = _fatura_cartao(c, _fim_mes(_hoje_brasil()), pagos_ate=date.max)
+            vencido = min(vencido, max(fatura, 0))
+            a_vencer = max(round(fatura - vencido, 2) + 0.0, 0.0)
+            linhas.append(f'{c.nome} (cartão de crédito): dívida em aberto {_rs(fatura)}, sendo já vencido {_rs(vencido)} e parcelas a vencer {_rs(a_vencer)} (compras {_rs(desp)} | pagamentos {_rs(rec)})')
+        else:
+            total += saldo
+            linhas.append(f'{c.nome}: saldo {_rs(saldo)} (entradas {_rs(rec)} | saídas {_rs(desp)})')
+    linhas.append(f'Saldo total das contas (sem o cartão): {_rs(total)}')
+    if any(c.tipo == 'cartao' for c in todas):
+        linhas.append(f'Fatura total dos cartões: {_rs(faturas)}')
     linhas.append('Obs.: as entradas e saídas incluem transferências entre contas, como na tela Contas.')
     return '\n'.join(linhas), False
 
@@ -1246,10 +1428,19 @@ def mcp(token):
         return '', 202
     return jsonify(resposta)
 
+def seed_cartao():
+    """Cria os cartões PF e PJ uma única vez (só se ainda não existir nenhum cartão)."""
+    if Conta.query.filter_by(tipo='cartao').count() == 0:
+        for nome, icone in (('Cartão de Crédito PF', '👤'), ('Cartão de Crédito PJ', '🏢')):
+            if not _nome_conta_repetido(nome):
+                db.session.add(Conta(nome=nome, tipo='cartao', icone=icone, cor='#f0466e'))
+        db.session.commit()
+
 with app.app_context():
     db.create_all()
     seed_categorias()
     seed_contas()
+    seed_cartao()
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

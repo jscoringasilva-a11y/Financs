@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, date, timedelta
 import json
@@ -1475,6 +1475,379 @@ def mcp(token):
     if resposta is None:
         return '', 202
     return jsonify(resposta)
+
+# ─── BACKUP EM EXCEL ──────────────────────────────────────────────────────────
+# Baixar: gera uma planilha com tudo. Restaurar: lê a planilha e SÓ ACRESCENTA o que não existe
+# no banco (nunca apaga nem altera o que já está lá).
+
+BACKUP_COLS_LANC = ['ID', 'Data', 'Descrição', 'Valor', 'Tipo', 'Categoria', 'Tipo da categoria',
+                    'Conta', 'Observação', 'Parcelas', '1ª parcela (AAAA-MM)']
+
+def _dt_txt(v):
+    return v.strftime('%Y-%m-%d %H:%M') if v else ''
+
+def _gerar_backup_xlsx():
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    def folha(nome, cab, linhas, larguras, fmts=None):
+        ws = wb.create_sheet(nome)
+        ws.append(cab)
+        for c in ws[1]:
+            c.font = Font(bold=True, color='FFFFFF')
+            c.fill = PatternFill('solid', fgColor='1E3340')
+        for lin in linhas:
+            ws.append(lin)
+        for row in ws.iter_rows(min_row=2):
+            for c in row:
+                if isinstance(c.value, str) and c.data_type == 'f':
+                    c.data_type = 's'          # texto que começa com "=" não vira fórmula
+        for col, fmt in (fmts or {}).items():
+            for row in ws.iter_rows(min_row=2, min_col=col, max_col=col):
+                row[0].number_format = fmt
+        for i, w in enumerate(larguras, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.freeze_panes = 'A2'
+        return ws
+
+    lancs = Lancamento.query.order_by(Lancamento.data, Lancamento.id).all()
+    parc = {p.lancamento_id: p.parcelas for p in Parcelamento.query.all()}
+    inic = {i.lancamento_id: f'{i.ano}-{i.mes:02d}' for i in ParcelamentoInicio.query.all()}
+
+    def linha_lanc(l):
+        return [l.id, l.data, l.descricao, round(l.valor, 2), l.tipo,
+                l.categoria.nome if l.categoria else '', l.categoria.tipo if l.categoria else '',
+                l.conta.nome if l.conta else '', l.observacao or '',
+                parc.get(l.id, ''), inic.get(l.id, '')]
+
+    larg = [8, 12, 46, 14, 10, 24, 16, 26, 40, 10, 20]
+    fm = {2: 'dd/mm/yyyy', 4: '#,##0.00'}
+
+    ws0 = wb.create_sheet('LEIA-ME')
+    ws0.append(['Backup do app de Finanças'])
+    ws0['A1'].font = Font(bold=True, size=14)
+    ws0.append([f'Gerado em {_hoje_brasil().strftime("%d/%m/%Y")}'])
+    ws0.append([''])
+    ws0.append(['Para restaurar: no app, menu Backup > Restaurar. Só entra o que estiver faltando no banco.'])
+    ws0.append(['A restauração lê as abas: Lançamentos, Contas, Categorias, Metas, Patrimônio e Fechamentos.'])
+    ws0.append(['As abas por mês (ex.: 2026-10) e o Resumo mensal são só para consulta e são ignoradas ao restaurar.'])
+    ws0.append(['Não troque os nomes das abas nem os títulos das colunas.'])
+    ws0.column_dimensions['A'].width = 110
+
+    # Resumo mensal (sem transferências entre contas)
+    resumo = defaultdict(lambda: [0.0, 0.0])
+    for l in lancs:
+        if _eh_transferencia(l):
+            continue
+        resumo[(l.data.year, l.data.month)][0 if l.tipo == 'receita' else 1] += l.valor
+    folha('Resumo mensal', ['Mês', 'Receitas', 'Despesas', 'Resultado'],
+          [[f'{a}-{m:02d}', round(r, 2), round(d, 2), round(r - d, 2)] for (a, m), (r, d) in sorted(resumo.items())],
+          [12, 16, 16, 16], {2: '#,##0.00', 3: '#,##0.00', 4: '#,##0.00'})
+
+    folha('Lançamentos', BACKUP_COLS_LANC, [linha_lanc(l) for l in lancs], larg, fm)
+
+    por_mes = defaultdict(list)
+    for l in lancs:
+        por_mes[f'{l.data.year}-{l.data.month:02d}'].append(l)
+    for chave in sorted(por_mes):
+        folha(chave, BACKUP_COLS_LANC, [linha_lanc(l) for l in por_mes[chave]], larg, fm)
+
+    folha('Contas', ['Nome', 'Tipo', 'Ícone', 'Cor'],
+          [[c.nome, c.tipo, c.icone or '', c.cor or ''] for c in Conta.query.order_by(Conta.id).all()],
+          [30, 12, 8, 12])
+    folha('Categorias', ['Nome', 'Tipo', 'Ícone', 'Cor'],
+          [[c.nome, c.tipo, c.icone or '', c.cor or ''] for c in Categoria.query.order_by(Categoria.tipo, Categoria.nome).all()],
+          [30, 12, 8, 12])
+    folha('Metas', ['Nome', 'Valor alvo', 'Valor atual', 'Prazo', 'Ícone', 'Ativa'],
+          [[m.nome, round(m.valor_alvo, 2), round(m.valor_atual or 0, 2), m.prazo or '', m.icone or '',
+            'Sim' if m.ativa else 'Não'] for m in Meta.query.order_by(Meta.id).all()],
+          [36, 16, 16, 12, 8, 8], {2: '#,##0.00', 3: '#,##0.00', 4: 'dd/mm/yyyy'})
+    folha('Patrimônio', ['Nome', 'Tipo', 'Grupo', 'Valor', 'Atualizado em'],
+          [[p.nome, p.tipo, p.grupo, round(p.valor or 0, 2), _dt_txt(p.atualizado_em)]
+           for p in Patrimonio.query.order_by(Patrimonio.id).all()],
+          [36, 10, 24, 16, 18], {4: '#,##0.00'})
+    folha('Fechamentos', ['Ano', 'Mês', 'Receitas', 'Despesas', 'Saldo contas', 'Total ativos',
+                          'Total passivos', 'Manual', 'Detalhes', 'Fechado em'],
+          [[f.ano, f.mes, f.receitas if f.receitas is not None else '', f.despesas if f.despesas is not None else '',
+            f.saldo_contas if f.saldo_contas is not None else '', f.total_ativos, f.total_passivos,
+            'Sim' if f.manual else 'Não', f.detalhes or '', _dt_txt(f.fechado_em)]
+           for f in Fechamento.query.order_by(Fechamento.ano, Fechamento.mes).all()],
+          [8, 8, 14, 14, 14, 14, 14, 8, 40, 18])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+def _ler_folha(wb, nome):
+    if nome not in wb.sheetnames:
+        return None
+    linhas = list(wb[nome].iter_rows(values_only=True))
+    if not linhas:
+        return []
+    cab = [str(c or '').strip() for c in linhas[0]]
+    saida = []
+    for r in linhas[1:]:
+        if r is None or all(c in (None, '') for c in r):
+            continue
+        saida.append({cab[i]: r[i] for i in range(min(len(cab), len(r))) if cab[i]})
+    return saida
+
+def _data_celula(v):
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v or '').strip()
+    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S'):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    raise ValueError('data inválida')
+
+def _datahora_celula(v):
+    if isinstance(v, datetime):
+        return v
+    try:
+        return datetime.strptime(str(v or '').strip(), '%Y-%m-%d %H:%M')
+    except ValueError:
+        return None
+
+def _num_ou_none(v):
+    if v in (None, ''):
+        return None
+    return _parse_valor(v)
+
+def _sim(v):
+    return v is True or _norm(v) in ('sim', 'true', '1', 'verdadeiro')
+
+def _restaurar_backup(arquivo):
+    """Lê a planilha de backup e acrescenta ao banco SÓ o que ainda não existe. Devolve (resumo, avisos)."""
+    from openpyxl import load_workbook
+    from collections import Counter
+    wb = load_workbook(arquivo, data_only=True, read_only=True)
+    if _ler_folha(wb, 'Lançamentos') is None:
+        raise ValueError('Esta planilha não parece um backup do app (não achei a aba "Lançamentos").')
+
+    resumo = {}
+    avisos = []
+
+    def conta_res(nome, novos, ja, ign=0):
+        resumo[nome] = {'novos': novos, 'ja': ja, 'ign': ign}
+
+    # Categorias
+    cats = {(_norm(c.nome), c.tipo): c for c in Categoria.query.all()}
+    novos = ja = ign = 0
+    for r in _ler_folha(wb, 'Categorias') or []:
+        nome, tipo = str(r.get('Nome') or '').strip()[:100], _norm(r.get('Tipo'))
+        if not nome or tipo not in ('receita', 'despesa'):
+            ign += 1
+            continue
+        if (_norm(nome), tipo) in cats:
+            ja += 1
+            continue
+        c = Categoria(nome=nome, tipo=tipo, icone=str(r.get('Ícone') or '💰')[:10], cor=str(r.get('Cor') or '#6366f1')[:20])
+        db.session.add(c)
+        cats[(_norm(nome), tipo)] = c
+        novos += 1
+    conta_res('Categorias', novos, ja, ign)
+
+    # Contas
+    contas = {_norm(c.nome): c for c in Conta.query.all()}
+    novos = ja = ign = 0
+    for r in _ler_folha(wb, 'Contas') or []:
+        nome, tipo = str(r.get('Nome') or '').strip()[:100], _norm(r.get('Tipo'))
+        if not nome or tipo not in ('corrente', 'poupanca', 'cartao'):
+            ign += 1
+            continue
+        if _norm(nome) in contas:
+            ja += 1
+            continue
+        c = Conta(nome=nome, tipo=tipo, icone=str(r.get('Ícone') or '🏦')[:10], cor=str(r.get('Cor') or '#4f8ef7')[:20])
+        db.session.add(c)
+        contas[_norm(nome)] = c
+        novos += 1
+    conta_res('Contas', novos, ja, ign)
+    db.session.flush()
+
+    # Lançamentos (compara data + descrição + valor + tipo + conta; repetidos legítimos são respeitados)
+    existentes = Counter()
+    for l in Lancamento.query.all():
+        existentes[(l.data, _norm(l.descricao), round(l.valor, 2), l.tipo, _norm(l.conta.nome if l.conta else ''))] += 1
+    novos = ja = ign = 0
+    for r in _ler_folha(wb, 'Lançamentos'):
+        try:
+            data_l = _data_celula(r.get('Data'))
+            desc = str(r.get('Descrição') or '').strip()[:200]
+            valor = round(_parse_valor(r.get('Valor')), 2)
+            tipo = _norm(r.get('Tipo'))
+            if not desc or valor <= 0 or tipo not in ('receita', 'despesa'):
+                raise ValueError('linha inválida')
+            nome_conta = str(r.get('Conta') or '').strip()
+            nome_cat = str(r.get('Categoria') or '').strip()
+            parcelas = int(_parse_valor(r['Parcelas'])) if r.get('Parcelas') not in (None, '') else 1
+            inicio = _parse_mes(str(r.get('1ª parcela (AAAA-MM)') or ''))
+        except (ValueError, TypeError, KeyError):
+            ign += 1
+            continue
+        chave = (data_l, _norm(desc), valor, tipo, _norm(nome_conta))
+        if existentes[chave] > 0:
+            existentes[chave] -= 1
+            ja += 1
+            continue
+        conta = None
+        if nome_conta:
+            conta = contas.get(_norm(nome_conta))
+            if conta is None:
+                conta = Conta(nome=nome_conta[:100], tipo='corrente')
+                db.session.add(conta)
+                contas[_norm(nome_conta)] = conta
+        cat = None
+        if nome_cat:
+            tipo_cat = _norm(r.get('Tipo da categoria')) or tipo
+            cat = cats.get((_norm(nome_cat), tipo_cat))
+            if cat is None:
+                cat = Categoria(nome=nome_cat[:100], tipo=tipo_cat if tipo_cat in ('receita', 'despesa') else tipo)
+                db.session.add(cat)
+                cats[(_norm(nome_cat), cat.tipo)] = cat
+        l = Lancamento(descricao=desc, valor=valor, tipo=tipo, data=data_l,
+                       categoria=cat, conta=conta, observacao=str(r.get('Observação') or '')[:500])
+        db.session.add(l)
+        if parcelas > 1:
+            db.session.flush()
+            db.session.add(Parcelamento(lancamento_id=l.id, parcelas=parcelas))
+            if inicio and inicio != (data_l.year, data_l.month):
+                db.session.add(ParcelamentoInicio(lancamento_id=l.id, ano=inicio[0], mes=inicio[1]))
+        novos += 1
+    conta_res('Lançamentos', novos, ja, ign)
+    db.session.flush()
+
+    # Metas
+    existentes = {(_norm(m.nome), round(m.valor_alvo, 2)) for m in Meta.query.all()}
+    novos = ja = ign = 0
+    for r in _ler_folha(wb, 'Metas') or []:
+        try:
+            nome = str(r.get('Nome') or '').strip()[:200]
+            alvo = round(_parse_valor(r.get('Valor alvo')), 2)
+            atual = _num_ou_none(r.get('Valor atual')) or 0
+            prazo = _data_celula(r['Prazo']) if r.get('Prazo') not in (None, '') else None
+            if not nome:
+                raise ValueError
+        except (ValueError, TypeError, KeyError):
+            ign += 1
+            continue
+        if (_norm(nome), alvo) in existentes:
+            ja += 1
+            continue
+        db.session.add(Meta(nome=nome, valor_alvo=alvo, valor_atual=atual, prazo=prazo,
+                            icone=str(r.get('Ícone') or '🎯')[:10], ativa=_sim(r.get('Ativa'))))
+        existentes.add((_norm(nome), alvo))
+        novos += 1
+    conta_res('Metas', novos, ja, ign)
+
+    # Patrimônio (itens digitados à mão)
+    existentes = {(_norm(p.nome), p.tipo, p.grupo) for p in Patrimonio.query.all()}
+    novos = ja = ign = 0
+    for r in _ler_folha(wb, 'Patrimônio') or []:
+        try:
+            nome = str(r.get('Nome') or '').strip()[:200]
+            tipo = _norm(r.get('Tipo'))
+            grupo = str(r.get('Grupo') or '').strip()[:50]
+            valor = _parse_valor(r.get('Valor'))
+            if not nome or tipo not in ('ativo', 'passivo') or not grupo:
+                raise ValueError
+        except (ValueError, TypeError):
+            ign += 1
+            continue
+        if (_norm(nome), tipo, grupo) in existentes:
+            ja += 1
+            continue
+        db.session.add(Patrimonio(nome=nome, tipo=tipo, grupo=grupo, valor=valor,
+                                  atualizado_em=_datahora_celula(r.get('Atualizado em')) or datetime.utcnow()))
+        existentes.add((_norm(nome), tipo, grupo))
+        novos += 1
+    conta_res('Patrimônio', novos, ja, ign)
+
+    # Fechamentos
+    existentes = {(f.ano, f.mes) for f in Fechamento.query.all()}
+    novos = ja = ign = 0
+    for r in _ler_folha(wb, 'Fechamentos') or []:
+        try:
+            ano, mes = int(_parse_valor(r.get('Ano'))), int(_parse_valor(r.get('Mês')))
+            ativos = _parse_valor(r.get('Total ativos'))
+            passivos = _parse_valor(r.get('Total passivos'))
+            if not (2000 <= ano <= 2100 and 1 <= mes <= 12):
+                raise ValueError
+        except (ValueError, TypeError):
+            ign += 1
+            continue
+        if (ano, mes) in existentes:
+            ja += 1
+            continue
+        db.session.add(Fechamento(
+            ano=ano, mes=mes, receitas=_num_ou_none(r.get('Receitas')), despesas=_num_ou_none(r.get('Despesas')),
+            saldo_contas=_num_ou_none(r.get('Saldo contas')), total_ativos=ativos, total_passivos=passivos,
+            manual=_sim(r.get('Manual')), detalhes=str(r.get('Detalhes') or '') or None,
+            fechado_em=_datahora_celula(r.get('Fechado em')) or datetime.utcnow()))
+        existentes.add((ano, mes))
+        novos += 1
+    conta_res('Fechamentos', novos, ja, ign)
+
+    wb.close()
+    return resumo, avisos
+
+def _contagens_backup():
+    return [('Lançamentos', Lancamento.query.count()), ('Contas', Conta.query.count()),
+            ('Categorias', Categoria.query.count()), ('Metas', Meta.query.count()),
+            ('Itens do patrimônio', Patrimonio.query.count()), ('Fechamentos', Fechamento.query.count())]
+
+@app.route('/backup')
+def backup():
+    return render_template('backup.html', resultado=None, erro=None, contagens=_contagens_backup())
+
+@app.route('/backup/baixar')
+def backup_baixar():
+    try:
+        dados = _gerar_backup_xlsx()
+    except ImportError:
+        return render_template('backup.html', resultado=None, contagens=_contagens_backup(),
+                               erro='A biblioteca de Excel ainda não foi instalada. Suba também o requirements.txt e aguarde o deploy.')
+    nome = f'backup-financas-{_hoje_brasil().strftime("%Y-%m-%d")}.xlsx'
+    return Response(dados, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    headers={'Content-Disposition': f'attachment; filename="{nome}"'})
+
+@app.route('/backup/restaurar', methods=['POST'])
+def backup_restaurar():
+    import io
+    arq = request.files.get('arquivo')
+    resultado, erro = None, None
+    if not arq or not arq.filename:
+        erro = 'Escolha o arquivo de backup (.xlsx).'
+    elif not arq.filename.lower().endswith('.xlsx'):
+        erro = 'O arquivo precisa ser uma planilha .xlsx (o backup baixado aqui).'
+    else:
+        conteudo = arq.read(15 * 1024 * 1024 + 1)
+        if len(conteudo) > 15 * 1024 * 1024:
+            erro = 'Arquivo grande demais.'
+        else:
+            try:
+                resultado, _ = _restaurar_backup(io.BytesIO(conteudo))
+                db.session.commit()
+            except ImportError:
+                db.session.rollback()
+                erro = 'A biblioteca de Excel ainda não foi instalada. Suba também o requirements.txt e aguarde o deploy.'
+            except ValueError as e:
+                db.session.rollback()
+                erro = str(e)
+            except Exception:
+                db.session.rollback()
+                erro = 'Não consegui ler esta planilha. Nada foi alterado no banco.'
+    return render_template('backup.html', resultado=resultado, erro=erro, contagens=_contagens_backup())
 
 def seed_cartao():
     """Cria os cartões PF e PJ uma única vez (só se ainda não existir nenhum cartão)."""

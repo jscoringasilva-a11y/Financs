@@ -193,6 +193,8 @@ def get_resumo_mes(ano, mes):
         Lancamento.data >= inicio,
         Lancamento.data <= fim
     ).all()
+    # Transferências entre contas não são receita nem despesa de verdade
+    lancamentos = [l for l in lancamentos if not _eh_transferencia(l)]
 
     receitas = sum(l.valor for l in lancamentos if l.tipo == 'receita')
     despesas = sum(l.valor for l in lancamentos if l.tipo == 'despesa')
@@ -415,6 +417,8 @@ def relatorios():
         Lancamento.data >= inicio_ano,
         Lancamento.data <= fim_ano
     ).all()
+    # Sem transferências entre contas
+    lancamentos_ano = [l for l in lancamentos_ano if not _eh_transferencia(l)]
 
     cat_desp = defaultdict(float)
     cat_rec = defaultdict(float)
